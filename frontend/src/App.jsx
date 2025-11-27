@@ -10,15 +10,10 @@ import {
   Bell, 
   Search,
   CheckCircle2,
-  AlertTriangle,
-  FileText,
-  Cpu,
-  X
+  Cpu 
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// In production (with Nginx), leave this empty to use relative paths.
-// In local dev (without Nginx), change to 'http://localhost:8000'.
 const API_BASE = ""; 
 
 // --- HELPER COMPONENTS ---
@@ -50,7 +45,6 @@ const ImpactBadge = ({ impact }) => {
 };
 
 const RelevanceMeter = ({ score }) => {
-  // Color gradient based on score
   let color = "bg-slate-600";
   if (score > 80) color = "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]";
   else if (score > 50) color = "bg-amber-500";
@@ -67,10 +61,6 @@ const RelevanceMeter = ({ score }) => {
       <span className={`text-xs font-mono font-bold ${score > 80 ? 'text-emerald-400' : score > 50 ? 'text-amber-400' : 'text-red-400'}`}>
         {score}%
       </span>
-      {/* Tooltip */}
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-48 bg-slate-900 border border-slate-700 p-2 rounded text-xs text-slate-300 z-10 shadow-xl">
-        AI Signal Confidence.
-      </div>
     </div>
   );
 };
@@ -91,39 +81,30 @@ export default function MarketMindDashboard() {
   // --- DATA FETCHING ---
   const fetchData = async () => {
     try {
-      // 1. Fetch News Feed
       const feedRes = await fetch(`${API_BASE}/api/feed`);
       if (feedRes.ok) {
-        const feedData = await feedRes.json();
-        setUpdates(feedData);
+        setUpdates(await feedRes.json());
       }
-
-      // 2. Fetch Technical Signals
       const sigRes = await fetch(`${API_BASE}/api/signals`);
       if (sigRes.ok) {
-        const sigData = await sigRes.json();
-        setSignals(sigData);
+        setSignals(await sigRes.json());
       }
       
       setLastConnection(new Date().toLocaleTimeString());
       setLoading(false);
     } catch (err) {
       console.error("API Error:", err);
-      // Optional: set error state here to show UI feedback
     }
   };
 
-  // Initial Load + Polling
   useEffect(() => {
     fetchData();
-    // Poll every 5 seconds
     const interval = setInterval(fetchData, 5000); 
     return () => clearInterval(interval);
   }, []);
 
   const handleScan = () => {
     setScanning(true);
-    // Simulate manual refresh visually before actual fetch
     setTimeout(() => {
         fetchData();
         setScanning(false);
@@ -138,11 +119,14 @@ export default function MarketMindDashboard() {
     return matchesSearch && matchesScore;
   });
 
+  // --- MARQUEE LOGIC ---
+  const marqueeSignals = [...signals, ...signals];
+
   return (
     <div className="flex h-screen w-full bg-[#0B0F19] text-slate-200 font-sans overflow-hidden">
       
-      {/* Sidebar */}
-      <aside className="w-64 border-r border-slate-800 flex flex-col bg-[#0f1422]">
+      {/* LEFT SIDEBAR (Navigation) */}
+      <aside className="w-64 border-r border-slate-800 flex flex-col bg-[#0f1422] shrink-0">
         <div className="p-6 flex items-center space-x-2">
           <div className="relative">
             <div className="absolute inset-0 bg-indigo-500 blur-sm opacity-50 animate-pulse"></div>
@@ -189,12 +173,13 @@ export default function MarketMindDashboard() {
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full relative">
+      {/* MAIN CONTENT */}
+      {/* Added min-w-0 to prevent flex child expansion issues */}
+      <main className="flex-1 flex flex-col h-full relative min-w-0">
         
         {/* Header with Live Ticker */}
-        <header className="flex flex-col border-b border-slate-800 bg-[#0B0F19]">
-            <div className="h-14 flex items-center justify-between px-8 border-b border-slate-800/50">
+        <header className="flex flex-col border-b border-slate-800 bg-[#0B0F19] w-full">
+            <div className="h-14 flex items-center justify-between px-8 border-b border-slate-800/50 w-full">
                 <div className="flex items-center space-x-4">
                     <h1 className="text-xl font-semibold text-white">
                     {activeTab === 'feed' ? 'Intelligence Feed' : activeTab === 'sources' ? 'Source Management' : 'Configuration'}
@@ -222,36 +207,53 @@ export default function MarketMindDashboard() {
             </div>
 
             {/* LIVE TICKER BAR */}
-            <div className="h-10 bg-[#0f1422] flex items-center px-4 overflow-hidden whitespace-nowrap">
-                <div className="flex items-center space-x-6 animate-marquee">
-                    {signals.length === 0 ? (
-                         <span className="text-xs text-slate-500">Waiting for VWAP Data...</span>
-                    ) : (
-                        signals.map((sig, idx) => (
-                            <div key={`${sig.ticker}-${idx}`} className="flex items-center space-x-2 text-xs">
-                                <span className="font-bold text-indigo-400">{sig.ticker}</span>
-                                <span className="text-slate-200">${sig.price}</span>
-                                <span className={`px-1 rounded font-bold ${
-                                    sig.status === 'OVERBOUGHT' ? 'bg-red-900/50 text-red-400' : 
-                                    sig.status === 'OVERSOLD' ? 'bg-green-900/50 text-green-400' : 
-                                    'text-slate-600'
-                                }`}>
-                                    {sig.status}
+            {/* Added w-full max-w-full overflow-hidden to constrain width */}
+            <div className="h-10 bg-[#0f1422] flex items-center px-4 overflow-hidden whitespace-nowrap border-t border-slate-800 w-full max-w-full">
+                {signals.length === 0 ? (
+                    <div className="w-full flex justify-center">
+                         <span className="text-xs text-slate-500 animate-pulse">Initializing VWAP Engine (15m Interval)...</span>
+                    </div>
+                ) : (
+                    <div 
+                      className="flex items-center space-x-8 animate-marquee" 
+                      // Reduced speed to 60s so it visibly moves
+                      style={{ animationDuration: '60s' }} 
+                    >
+                        {marqueeSignals.map((sig, idx) => (
+                            <div key={`${sig.ticker}-${idx}`} className="flex items-center space-x-3 text-xs border-r border-slate-800 pr-6 last:border-0 shrink-0">
+                                <span className="font-bold text-slate-200">{sig.name || sig.ticker}</span>
+                                
+                                <span className={`${
+                                    sig.price > sig.vwap ? 'text-green-400' : 'text-red-400'
+                                } font-mono`}>
+                                  ${sig.price}
                                 </span>
-                                <span className="text-slate-500">RSI {sig.rsi}</span>
-                                <span className="text-slate-600">|</span>
+                                
+                                {sig.status !== 'NEUTRAL' && (
+                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                                      sig.status === 'OVERBOUGHT' ? 'bg-red-500/20 text-red-400' : 
+                                      'bg-green-500/20 text-green-400'
+                                  }`}>
+                                      {sig.status}
+                                  </span>
+                                )}
+
+                                <div className="flex space-x-2 text-slate-500 text-[10px]">
+                                  <span>RSI {sig.rsi}</span>
+                                  {sig.rvol > 1.2 && <span className="text-yellow-500">Vol {sig.rvol}x</span>}
+                                </div>
                             </div>
-                        ))
-                    )}
-                </div>
+                        ))}
+                    </div>
+                )}
             </div>
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden flex min-w-0">
           
           {/* Feed Column */}
-          <div className="flex-1 overflow-y-auto p-8 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+          <div className="flex-1 overflow-y-auto p-8 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent min-w-0">
             
             {activeTab === 'feed' && (
               <div className="max-w-4xl mx-auto space-y-6">
@@ -381,11 +383,11 @@ export default function MarketMindDashboard() {
                           </div>
                           <div>
                             <h3 className="font-medium text-slate-200">Yahoo Finance (VWAP)</h3>
-                            <code className="text-xs text-slate-500">yfinance API</code>
+                            <code className="text-xs text-slate-500">15m Calculation Interval</code>
                           </div>
                         </div>
                         <div className="flex items-center space-x-6 text-sm text-slate-400">
-                          <span>5m Interval</span>
+                           <span>~{signals.length} Tickers</span>
                           <span className="text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded text-xs">Active</span>
                         </div>
                     </div>
@@ -394,8 +396,8 @@ export default function MarketMindDashboard() {
             )}
           </div>
 
-          {/* Filters Column (Right Side) */}
-          <aside className="w-80 border-l border-slate-800 bg-[#0f1422] p-6 flex flex-col">
+          {/* RIGHT SIDEBAR (Signal Calibration) - Restored */}
+          <aside className="w-80 border-l border-slate-800 bg-[#0f1422] p-6 flex flex-col shrink-0">
             <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">Signal Calibration</h2>
             
             <div className="space-y-8">

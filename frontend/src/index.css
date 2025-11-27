@@ -2,9 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom Scrollbar for the feed */
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: #0f1422; 
@@ -17,11 +18,7 @@
   background: #475569; 
 }
 
-/* Ticker Animation */
-@keyframes marquee {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
+/* Ensure the marquee layer is hardware accelerated for smoothness */
 .animate-marquee {
-  animation: marquee 30s linear infinite;
+  will-change: transform;
 }

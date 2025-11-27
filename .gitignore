@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .env
 .DS_Store
+market_mind.db-shm
+market_mind.db-wal
 
 # --- Node / Frontend ---
 node_modules/

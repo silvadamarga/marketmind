@@ -22,19 +22,25 @@ load_dotenv()
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-DB_FILE = "market_mind.db"
+
+# --- NEW: LOAD URLS FROM ENV TO PREVENT CORRUPTION ---
+PUSHBULLET_STREAM_URL = os.getenv("PUSHBULLET_STREAM_URL", "wss://stream.pushbullet.com/websocket/")
+PUSHBULLET_API_URL = os.getenv("PUSHBULLET_API_URL", "https://api.pushbullet.com/v2/pushes?limit=1")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "market_mind.db")
+print(f"📂 Database Path Locked: {DB_FILE}") 
 
 # --- 2. GLOBAL SETTINGS ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
-# Queue to handle news bursts without crashing threads
 NEWS_QUEUE = queue.Queue()
 
 # --- 3. NEWS INTELLIGENCE SETTINGS ---
-MIN_IMPACT_SCORE = 7 
+MIN_IMPACT_SCORE = 60 
 TARGET_APPS = [
     "yahoo finance", "cnbc", "bloomberg", "tradingview", "cnn", 
     "bbc news", "google news", "seeking alpha", "barron's",
-    "wsj", "reuters", "financial times"
+    "wsj", "reuters", "ft"
 ]
 TARGET_PACKAGES = [
     "com.yahoo.mobile.client.android.finance", "com.cnbc.client",                         
@@ -42,28 +48,44 @@ TARGET_PACKAGES = [
     "com.cnn.mobile.android.phone", "bbc.mobile.news.uk",                      
     "bbc.mobile.news.ww", "com.google.android.apps.magazines",       
     "com.seekingalpha.webwrapper", "com.barrons.android",
-    "com.wsj.android.reader", "com.thomsonreuters.reuters"
+    "com.wsj.android.reader", "com.thomsonreuters.reuters",
+    "com.ft.news"
 ]
 
 # --- 4. TECHNICAL MONITOR SETTINGS (VWAP) ---
-# NOTE: YFinance data is delayed 15m for Stocks, Realtime for Crypto.
-VWAP_WATCHLIST = ["SPY", "COIN", "BTC-USD", "NVDA"]
-VWAP_CHECK_INTERVAL = 300  # 5 Minutes
-VWAP_BANDS = 2.0           # Standard Deviations
+VWAP_CHECK_INTERVAL = 900  # 15 Minutes
+VWAP_BANDS = 2.0           
 RSI_PERIOD = 14
+
+# Global Cache
+LATEST_VWAP_DATA = {}
+
+# MAPPING TICKERS TO FRIENDLY NAMES
+TICKER_MAP = {
+    # --- INDICES ---
+    "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones", "VTI": "Total Market",
+    # --- SECTORS ---
+    "XLK": "Technology", "XLF": "Financials", "XLV": "Healthcare", "XLE": "Energy", 
+    "XLC": "Comms", "XLY": "Discretionary", "XLP": "Staples", "XLI": "Industrials", 
+    "XLB": "Materials", "XLRE": "Real Estate", "XLU": "Utilities",
+    # --- COMMODITIES & BONDS ---
+    "GLD": "Gold", "SLV": "Silver", "USO": "Crude Oil", "TLT": "20y Treasury", "HYG": "Corp Bonds",
+    # --- CRYPTO & VOL ---
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "VIXY": "Volatility", "COIN": "Coinbase", "NVDA": "Nvidia"
+}
+
+VWAP_WATCHLIST = list(TICKER_MAP.keys())
 
 # ================= SYSTEM INITIALIZATION =================
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Using Flash for speed/cost efficiency
     model = genai.GenerativeModel(
         'gemini-2.0-flash',
         generation_config={"response_mime_type": "application/json"}
     )
 
 def init_db():
-    """Initializes SQLite with WAL mode for high concurrency."""
     try:
         with sqlite3.connect(DB_FILE) as conn:
             conn.execute('PRAGMA journal_mode=WAL;') 
@@ -89,7 +111,6 @@ def init_db():
         print(f"❌ Database Error: {e}")
 
 def log_transaction(source_app, title, body, prompt, raw_response, parsed_data, error=None):
-    """Logs every AI interaction to the database safely."""
     timestamp = datetime.datetime.now().isoformat()
     status = "ERROR" if error else "SUCCESS"
     error_msg = str(error) if error else None
@@ -114,9 +135,7 @@ def log_transaction(source_app, title, body, prompt, raw_response, parsed_data, 
 # ================= MODULE 1: AI NEWS ANALYST =================
 
 def clean_json_string(text):
-    """Robustly cleans Markdown wrappers from LLM JSON responses."""
     text = text.strip()
-    # Remove markdown code blocks if present
     if text.startswith("```"):
         text = re.sub(r"^```(json)?|```$", "", text, flags=re.MULTILINE | re.DOTALL).strip()
     return text
@@ -132,30 +151,35 @@ def get_gemini_analysis(title, body, source_app):
     Body: "{body}"
 
     TASK:
-    1. FILTER: Ignore politics (unless economic), sports, crime, celebrity.
+    1. FILTER: Ignore politics (unless impactful), sports, crime, celebrity.
     2. ANALYZE: What is the immediate market impact?
     3. OUTPUT (JSON ONLY):
     {{
-      "headline": "<Short 7-word summary>",
+      "headline": "<Short 10-word summary>",
       "ticker": "NVDA" | "BTC" | "MACRO" | "EURUSD",
       "action": "BUY" | "SELL" | "WATCH" | "AVOID",
       "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-      "impact_score": 0-10,
+      "impact_score": 0-100,
       "timeframe": "SCALP" | "INTRADAY" | "SWING",
-      "thesis": "<Max 10 words reason>",
-      "counter": "<Max 5 words risk>"
+      "thesis": "<Max 20 words reason>",
+      "counter": "<Max 10 words risk>"
     }}
     """
     
     raw_text = ""
     try:
-        # Add retry logic for API stability
         response = model.generate_content(prompt)
         raw_text = response.text
         
         cleaned_text = clean_json_string(raw_text)
         data = json.loads(cleaned_text)
         
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                data = data[0]
+            else:
+                data = {}
+
         log_transaction(source_app, title, body, prompt, raw_text, data)
         return data
 
@@ -170,7 +194,7 @@ def send_news_alert(analysis, original_title, source_app):
     action_emoji = {"BUY": "🟢", "SELL": "🔴", "WATCH": "👀", "AVOID": "⛔"}.get(analysis.get('action'), "⚪")
 
     embed = {
-        "title": f"{action_emoji} {analysis.get('action')} {analysis.get('ticker')} | Score: {analysis.get('impact_score')}/10",
+        "title": f"{action_emoji} {analysis.get('action')} {analysis.get('ticker')} | Score: {analysis.get('impact_score')}/100",
         "description": f"**{analysis.get('headline', original_title)}**\n\n> *Thesis: \"{analysis.get('thesis')}\"*\n> *Risk: \"{analysis.get('counter')}\"*",
         "color": color,
         "fields": [
@@ -183,107 +207,75 @@ def send_news_alert(analysis, original_title, source_app):
     }
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind AI"})
-    except Exception as e:
-        print(f"⚠️ Discord Error: {e}")
+    except Exception:
+        pass
 
 def process_news_queue():
-    """Worker thread that processes the queue sequentially."""
     print("👷 News Worker Thread Started")
     while True:
         try:
-            # Block until an item is available
             task = NEWS_QUEUE.get()
             title, body, source_app = task
+            
+            if not title and body:
+                title = (body[:50] + '...') if len(body) > 50 else body
             
             print(f"🔍 Analyzing: {title[:40]}...")
             analysis = get_gemini_analysis(title, body, source_app)
             
             if analysis:
-                if analysis.get("impact_score", 0) >= MIN_IMPACT_SCORE or analysis.get("sentiment") != "NEUTRAL":
+                if analysis.get("impact_score", 0) >= MIN_IMPACT_SCORE:
                     send_news_alert(analysis, title, source_app)
                     print(f"🚀 Alert Sent: {analysis.get('ticker')}")
                 else:
                     print(f"⚖️  Withheld (Score: {analysis.get('impact_score')})")
             
-            # Rate limit protection (Gemini Flash is high limit, but good practice)
             time.sleep(1) 
             NEWS_QUEUE.task_done()
             
         except Exception as e:
             print(f"⚠️ Worker Error: {e}")
 
-# ================= MODULE 2: VWAP TECHNICAL MONITOR (SMART) =================
+# ================= MODULE 2: VWAP TECHNICAL MONITOR =================
 
 def calculate_rsi(series, period=14):
-    """Calculates Relative Strength Index (RSI)"""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    
-    # Avoid division by zero
     loss = loss.replace(0, np.nan) 
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
 def get_technical_confluence(ticker):
     try:
-        # Fetch 5 days of 5m data
-        df = yf.download(ticker, period='5d', interval='5m', progress=False)
-        
-        if df.empty or len(df) < 50: 
-            return None
-
-        # Handle MultiIndex columns (common in new yfinance versions)
+        df = yf.download(ticker, period='5d', interval='15m', progress=False)
+        if df.empty or len(df) < 50: return None
         if isinstance(df.columns, pd.MultiIndex):
-            # Flatten to just Ticker if needed, or drop level
-            try:
-                df.columns = df.columns.get_level_values(0)
-            except:
-                pass
+            try: df.columns = df.columns.get_level_values(0)
+            except: pass
 
-        # --- 1. VWAP Calculation (Rolling Approx) ---
-        # Rolling 78 periods ~ 1 trading day (6.5 hours)
         df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['TP_V'] = df['Typical_Price'] * df['Volume']
+        df['VWAP'] = (df['TP_V'].rolling(window=26).sum() / df['Volume'].rolling(window=26).sum())
         
-        df['VWAP'] = (df['TP_V'].rolling(window=78).sum() / df['Volume'].rolling(window=78).sum())
-
-        rolling_std = df['Close'].rolling(window=78).std()
+        rolling_std = df['Close'].rolling(window=26).std()
         df['Upper_Band'] = df['VWAP'] + (rolling_std * VWAP_BANDS)
         df['Lower_Band'] = df['VWAP'] - (rolling_std * VWAP_BANDS)
-
-        # --- 2. RSI Calculation ---
         df['RSI'] = calculate_rsi(df['Close'], RSI_PERIOD)
-
-        # --- 3. Relative Volume (RVOL) ---
         df['Avg_Vol'] = df['Volume'].rolling(window=20).mean()
         df['RVOL'] = df['Volume'] / df['Avg_Vol']
         
-        # We return the LAST COMPLETED candle (iloc[-2]) to avoid false signals 
-        # from a candle that just started (low volume, incomplete price action)
-        # However, for SNIPER entries, sometimes we want current (-1). 
-        # Compromise: Use -1 but require minimum volume threshold.
-        
         return df.iloc[-1]
-
-    except Exception as e:
-        print(f"⚠️ Data Fetch Error ({ticker}): {e}")
+    except Exception:
         return None
 
 def send_vwap_alert(ticker, alert_type, msg, data):
-    # Determine color based on Long/Short
     color = 0x00FF00 if "LONG" in alert_type else 0xFF0000
-
     embed = {
         "title": f"{alert_type} | {ticker}",
-        "description": f"**{msg}**\n\n> Price: `${float(data['Close']):.2f}`\n> RSI: `{float(data['RSI']):.1f}`\n> RVOL: `{float(data['RVOL']):.1f}x`",
+        "description": f"**{msg}**\n\n> Price: `${float(data['Close']):.2f}`",
         "color": color,
-        "fields": [
-            {"name": "VWAP", "value": f"${float(data['VWAP']):.2f}", "inline": True},
-            {"name": "Bands", "value": f"L: ${float(data['Lower_Band']):.2f} / H: ${float(data['Upper_Band']):.2f}", "inline": True}
-        ],
-        "footer": {"text": "Market Mind • Technicals"},
-        "timestamp": datetime.datetime.now().isoformat()
+        "footer": {"text": "Market Mind • Technicals"}
     }
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind Tech"})
@@ -291,74 +283,106 @@ def send_vwap_alert(ticker, alert_type, msg, data):
         pass
 
 def vwap_monitor_loop():
-    print(f"📈 Smart Monitor Started: {len(VWAP_WATCHLIST)} Tickers")
-    # State tracking to prevent spamming the same alert every 5 mins
-    last_alert_state = {ticker: "NEUTRAL" for ticker in VWAP_WATCHLIST}
-
+    print(f"📈 Monitor Started: {len(VWAP_WATCHLIST)} Tickers")
     while True:
+        print(f"🔄 Refreshing VWAP Data...")
         for ticker in VWAP_WATCHLIST:
             try:
                 row = get_technical_confluence(ticker)
                 if row is None: continue
-
-                price = row['Close']
-                current_state = "NEUTRAL"
-                alert_type = None
-                msg = ""
                 
-                # Validation checks
+                price = row['Close']
                 if pd.isna(row['RSI']) or pd.isna(row['VWAP']): continue
 
-                # --- STRATEGY LOGIC ---
-                is_high_vol = row['RVOL'] > 1.5 
-                is_rsi_ob = row['RSI'] > 70
-                is_rsi_os = row['RSI'] < 30
-                
-                # SHORT: Price > Upper Band + Overbought + Volume Spike (Reversion)
-                if price > row['Upper_Band'] and is_rsi_ob and is_high_vol:
-                    current_state = "SHORT_SIGNAL"
-                    if last_alert_state[ticker] != "SHORT_SIGNAL":
-                        alert_type = "🚨 SNIPER SHORT (Reversion)"
-                        msg = f"Price extended {VWAP_BANDS}σ above VWAP with Volume."
+                status = "NEUTRAL"
+                if price > row['Upper_Band']: status = "OVERBOUGHT"
+                elif price < row['Lower_Band']: status = "OVERSOLD"
 
-                # LONG: Price < Lower Band + Oversold + Volume Spike (Reversion)
-                elif price < row['Lower_Band'] and is_rsi_os and is_high_vol:
-                    current_state = "LONG_SIGNAL"
-                    if last_alert_state[ticker] != "LONG_SIGNAL":
-                        alert_type = "🚨 SNIPER LONG (Reversion)"
-                        msg = f"Price extended {VWAP_BANDS}σ below VWAP with Volume."
-
-                if alert_type:
-                    send_vwap_alert(ticker, alert_type, msg, row)
-                    print(f"🔥 SIGNAL: {ticker} - {alert_type}")
-                
-                # Hysteresis: Reset state only when price returns inside bands
-                if row['Lower_Band'] < price < row['Upper_Band']:
-                    last_alert_state[ticker] = "NEUTRAL"
-            
+                LATEST_VWAP_DATA[ticker] = {
+                    "ticker": ticker,
+                    "name": TICKER_MAP.get(ticker, ticker),
+                    "price": round(float(price), 2),
+                    "vwap": round(float(row['VWAP']), 2),
+                    "rsi": round(float(row['RSI']), 1),
+                    "rvol": round(float(row['RVOL']), 1) if not pd.isna(row['RVOL']) else 0,
+                    "status": status,
+                }
             except Exception as e:
                 print(f"⚠️ Monitor Error {ticker}: {e}")
-
         time.sleep(VWAP_CHECK_INTERVAL)
 
-# ================= MODULE 3: WEBSOCKET LISTENER =================
+# ================= MODULE 3: WEBSOCKET LISTENER (ENV CONFIG) =================
+
+def fetch_latest_push():
+    """Manually fetches the latest push with delay and debugging."""
+    print("   ⏳ Waiting 2 seconds for API indexing...")
+    time.sleep(2) # <--- CRITICAL FIX for Race Condition
+    
+    try:
+        headers = {"Access-Token": PUSHBULLET_API_KEY}
+        resp = requests.get(PUSHBULLET_API_URL, headers=headers)
+        
+        # DEBUG PRINT: Verify what the API actually replies
+        print(f"   📥 API Response: {resp.status_code}") 
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            pushes = data.get("pushes", [])
+            
+            if pushes:
+                latest = pushes[0]
+                # Filter out dismissed/inactive pushes if necessary
+                if latest.get('active'):
+                    print(f"   ✅ Fetched: {latest.get('title', 'No Title')}")
+                    return latest
+                else:
+                    print("   🗑️ Latest push is marked inactive/dismissed.")
+            else:
+                print("   ⚠️ API returned 200 OK, but list is empty.")
+                print(f"   🔎 Raw Data: {data}") # See if 'accounts' or other data exists
+        else:
+            print(f"   ❌ API Error: {resp.text}")
+            
+    except Exception as e:
+        print(f"   ⚠️ Fetch Error: {e}")
+    return None
+
+def handle_push_content(push):
+    p_type = push.get('type')
+    title = push.get('title', '')
+    body = push.get('body', '')
+    app_name = push.get("application_name", "Unknown App")
+    
+    print(f"📦 Processing: {p_type} | {app_name} | {title[:30]}...")
+
+    # --- MODIFIED: REMOVED ALL FILTERS ---
+    # We now accept 'mirror' (apps) and 'note' (manual pushes) unconditionally.
+    if p_type in ["mirror", "note"]:
+        # If the app name is missing, use a fallback so the DB doesn't crash
+        safe_source = app_name if app_name else "Pushbullet Raw"
+        
+        print(f"✅ Queueing: {safe_source}")
+        NEWS_QUEUE.put((title, body, safe_source))
+        
+    else:
+        print(f"⚠️ Skipped unsupported type: {p_type}")
 
 def on_message(ws, message):
     try:
         data = json.loads(message)
-        if data.get("type") == "push":
-            push = data.get("push", {})
-            if push.get("type") == "mirror":
-                app_name = push.get("application_name", "Unknown")
-                pkg_name = push.get("package_name", "")
+        msg_type = data.get("type")
 
-                is_target = any(t in app_name.lower() for t in TARGET_APPS) or pkg_name in TARGET_PACKAGES
-                
-                if is_target:
-                    print(f"📨 Queued: {app_name}")
-                    # Put into queue instead of spawning thread immediately
-                    NEWS_QUEUE.put((push.get("title", ""), push.get("body", ""), app_name))
-                    
+        if msg_type == "nop": return
+
+        if msg_type == "tickle" and data.get("subtype") == "push":
+            print("🔔 Tickle received! Fetching latest push...")
+            latest = fetch_latest_push()
+            if latest:
+                handle_push_content(latest)
+        
+        elif msg_type == "push":
+            handle_push_content(data.get("push", {}))
+
     except Exception as e:
         print(f"⚠️ WS Msg Error: {e}")
 
@@ -369,8 +393,9 @@ def on_close(ws, close_status_code, close_msg):
     print("⚠️ Connection Closed")
 
 def start_listening():
-    # FIXED: Removed markdown syntax that was causing the crash
-    ws_url = f"wss://stream.pushbullet.com/websocket/{PUSHBULLET_API_KEY}"
+    # Use the variable loaded from .env
+    ws_url = f"{PUSHBULLET_STREAM_URL}{PUSHBULLET_API_KEY}"
+    
     while True:
         try:
             print(f"🎧 News Listener Connecting...")
@@ -384,5 +409,5 @@ def start_listening():
             ws.run_forever(ping_interval=30, ping_timeout=10)
         except Exception as e:
             print(f"❌ Connection Failed: {e}")
-            time.sleep(10) # Backoff before reconnect
+            time.sleep(10)
         time.sleep(5)
