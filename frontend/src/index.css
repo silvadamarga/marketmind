@@ -2,23 +2,55 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom Scrollbar */
+:root {
+  background-color: #0B0F19;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: #0f1422; 
 }
 ::-webkit-scrollbar-thumb {
   background: #334155; 
-  border-radius: 4px;
+  border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #475569; 
 }
 
-/* Ensure the marquee layer is hardware accelerated for smoothness */
+/* --- ANIMATIONS --- */
+
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
 .animate-marquee {
+  display: flex;
+  width: max-content;  /* <--- CHANGED: Forces box to hug the content exactly */
+  animation: marquee linear infinite;
   will-change: transform;
+}
+
+/* PAUSE ON HOVER */
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

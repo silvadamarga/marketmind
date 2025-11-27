@@ -13,68 +13,55 @@ import pandas as pd
 import numpy as np
 import warnings
 import re
+import math
 from dotenv import load_dotenv
 
 # ================= CONFIGURATION =================
 
-# --- 1. ENVIRONMENT & KEYS ---
 load_dotenv()
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# --- NEW: LOAD URLS FROM ENV TO PREVENT CORRUPTION ---
 PUSHBULLET_STREAM_URL = os.getenv("PUSHBULLET_STREAM_URL", "wss://stream.pushbullet.com/websocket/")
 PUSHBULLET_API_URL = os.getenv("PUSHBULLET_API_URL", "https://api.pushbullet.com/v2/pushes?limit=1")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "market_mind.db")
-print(f"📂 Database Path Locked: {DB_FILE}") 
 
-# --- 2. GLOBAL SETTINGS ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
 NEWS_QUEUE = queue.Queue()
+DATA_LOCK = threading.Lock() 
+MIN_IMPACT_SCORE = 6
 
-# --- 3. NEWS INTELLIGENCE SETTINGS ---
-MIN_IMPACT_SCORE = 60 
-TARGET_APPS = [
-    "yahoo finance", "cnbc", "bloomberg", "tradingview", "cnn", 
-    "bbc news", "google news", "seeking alpha", "barron's",
-    "wsj", "reuters", "ft"
-]
-TARGET_PACKAGES = [
-    "com.yahoo.mobile.client.android.finance", "com.cnbc.client",                         
-    "com.bloomberg.android.plus", "com.tradingview.tradingviewapp",          
-    "com.cnn.mobile.android.phone", "bbc.mobile.news.uk",                      
-    "bbc.mobile.news.ww", "com.google.android.apps.magazines",       
-    "com.seekingalpha.webwrapper", "com.barrons.android",
-    "com.wsj.android.reader", "com.thomsonreuters.reuters",
-    "com.ft.news"
-]
-
-# --- 4. TECHNICAL MONITOR SETTINGS (VWAP) ---
-VWAP_CHECK_INTERVAL = 900  # 15 Minutes
-VWAP_BANDS = 2.0           
-RSI_PERIOD = 14
-
-# Global Cache
-LATEST_VWAP_DATA = {}
-
-# MAPPING TICKERS TO FRIENDLY NAMES
+# --- ASSET UNIVERSE ---
 TICKER_MAP = {
-    # --- INDICES ---
     "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones", "VTI": "Total Market",
-    # --- SECTORS ---
+    "^TNX": "10Y Treasury Yield",  "DX-Y.NYB": "US Dollar Index", "^VIX": "Volatility Index",
     "XLK": "Technology", "XLF": "Financials", "XLV": "Healthcare", "XLE": "Energy", 
     "XLC": "Comms", "XLY": "Discretionary", "XLP": "Staples", "XLI": "Industrials", 
     "XLB": "Materials", "XLRE": "Real Estate", "XLU": "Utilities",
-    # --- COMMODITIES & BONDS ---
-    "GLD": "Gold", "SLV": "Silver", "USO": "Crude Oil", "TLT": "20y Treasury", "HYG": "Corp Bonds",
-    # --- CRYPTO & VOL ---
-    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "VIXY": "Volatility", "COIN": "Coinbase", "NVDA": "Nvidia"
+    "SMH": "Semiconductors", "XBI": "Biotech", "XRT": "Retail", "ITB": "Homebuilders", "JNK": "Junk Bonds",
+    "GLD": "Gold", "SLV": "Silver", "USO": "Crude Oil", "TLT": "20y Treasury", 
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum"
 }
 
 VWAP_WATCHLIST = list(TICKER_MAP.keys())
+VWAP_CHECK_INTERVAL = 900
+VWAP_BANDS = 2.0           
+RSI_PERIOD = 14
+LATEST_VWAP_DATA = {}
+
+# ================= HELPER: NAN SAFETY =================
+
+def safe_round(val, digits=2):
+    try:
+        if val is None: return 0.0
+        f = float(val)
+        if math.isnan(f) or math.isinf(f): return 0.0
+        return round(f, digits)
+    except Exception:
+        return 0.0
 
 # ================= SYSTEM INITIALIZATION =================
 
@@ -90,10 +77,13 @@ def init_db():
         with sqlite3.connect(DB_FILE) as conn:
             conn.execute('PRAGMA journal_mode=WAL;') 
             c = conn.cursor()
+            # ADDED: source_package, source_icon
             c.execute('''CREATE TABLE IF NOT EXISTS logs (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             timestamp TEXT,
                             source_app TEXT,
+                            source_package TEXT,
+                            source_icon TEXT,
                             title TEXT,
                             body TEXT,
                             ticker TEXT,
@@ -103,31 +93,54 @@ def init_db():
                             thesis TEXT,
                             raw_response TEXT,
                             status TEXT,
-                            error_msg TEXT
+                            error_msg TEXT,
+                            market_vix REAL,
+                            market_sector_json TEXT,
+                            text_embedding BLOB,
+                            ticker_rsi REAL,
+                            ticker_rvol REAL,
+                            ticker_vwap_dist REAL,
+                            session_phase TEXT,
+                            event_category TEXT,
+                            novelty_score INTEGER,
+                            ai_confidence INTEGER
                         )''')
             conn.commit()
-        print(f"✅ Database initialized: {DB_FILE} (WAL Mode Active)")
+        print(f"✅ Database initialized: {DB_FILE}")
     except Exception as e:
         print(f"❌ Database Error: {e}")
 
-def log_transaction(source_app, title, body, prompt, raw_response, parsed_data, error=None):
+def log_transaction(data_pack, prompt, raw_response, parsed_data, 
+                   market_vix=None, market_sector_json=None, embedding=None, 
+                   ticker_rsi=None, ticker_rvol=None, ticker_vwap_dist=None, 
+                   session_phase=None, error=None):
+    
     timestamp = datetime.datetime.now().isoformat()
     status = "ERROR" if error else "SUCCESS"
     error_msg = str(error) if error else None
+    p = parsed_data if parsed_data else {}
     
-    ticker = parsed_data.get("ticker") if parsed_data else None
-    action = parsed_data.get("action") if parsed_data else None
-    sentiment = parsed_data.get("sentiment") if parsed_data else None
-    impact_score = parsed_data.get("impact_score", 0) if parsed_data else 0
-    thesis = parsed_data.get("thesis") if parsed_data else None
-
     try:
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
             c.execute('''INSERT INTO logs 
-                         (timestamp, source_app, title, body, ticker, action, sentiment, impact_score, thesis, raw_response, status, error_msg)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                      (timestamp, source_app, title, body, ticker, action, sentiment, impact_score, thesis, raw_response, status, error_msg))
+                         (timestamp, source_app, source_package, source_icon, title, body, ticker, action, sentiment, 
+                          impact_score, thesis, raw_response, status, error_msg,
+                          market_vix, market_sector_json, text_embedding,
+                          ticker_rsi, ticker_rvol, ticker_vwap_dist, session_phase,
+                          event_category, novelty_score, ai_confidence)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                      (timestamp, 
+                       data_pack.get("source"), 
+                       data_pack.get("package"), 
+                       data_pack.get("icon"), 
+                       data_pack.get("title"), 
+                       data_pack.get("body"), 
+                       p.get("ticker"), p.get("action"), p.get("sentiment"), 
+                       p.get("impact_score", 0), p.get("thesis"), raw_response, status, error_msg,
+                       safe_round(market_vix), market_sector_json, embedding,
+                       safe_round(ticker_rsi), safe_round(ticker_rvol), safe_round(ticker_vwap_dist), session_phase,
+                       p.get("event_category"), p.get("novelty_score"), p.get("ai_confidence")))
             conn.commit()
     except Exception as e:
         print(f"⚠️ Logging Failed: {e}")
@@ -140,103 +153,63 @@ def clean_json_string(text):
         text = re.sub(r"^```(json)?|```$", "", text, flags=re.MULTILINE | re.DOTALL).strip()
     return text
 
+def get_text_embedding(text):
+    try:
+        if not text: return None
+        result = genai.embed_content(model="models/text-embedding-004", content=text)
+        return json.dumps(result['embedding']) 
+    except Exception: return None
+
 def get_gemini_analysis(title, body, source_app):
     prompt = f"""
-    You are a High-Frequency Trading Assistant.
-    Goal: Filter noise, identify tradeable catalysts.
-
-    INPUT:
-    Source: {source_app}
-    Title: "{title}"
-    Body: "{body}"
-
-    TASK:
-    1. FILTER: Ignore politics (unless impactful), sports, crime, celebrity.
-    2. ANALYZE: What is the immediate market impact?
-    3. OUTPUT (JSON ONLY):
+    You are a Financial Data Labeling Engine.
+    INPUT: Source: {source_app}, Title: "{title}", Body: "{body}"
+    
+    OUTPUT JSON format (Strict):
     {{
-      "headline": "<Short 10-word summary>",
+      "headline": "<Neutral summary>",
       "ticker": "NVDA" | "BTC" | "MACRO" | "EURUSD",
       "action": "BUY" | "SELL" | "WATCH" | "AVOID",
       "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-      "impact_score": 0-100,
+      "impact_score": 1-10,
+      "novelty_score": 1-10,
+      "ai_confidence": 1-10,
+      "event_category": "EARNINGS" | "MACRO_DATA" | "CENTRAL_BANK" | "GEOPOLITICS" | "M_AND_A" | "REGULATION" | "TECHNICALS" | "SENTIMENT" | "OTHER",
       "timeframe": "SCALP" | "INTRADAY" | "SWING",
-      "thesis": "<Max 20 words reason>",
-      "counter": "<Max 10 words risk>"
+      "thesis": "<Reasoning>",
+      "counter": "<Risks>"
     }}
     """
-    
-    raw_text = ""
     try:
         response = model.generate_content(prompt)
         raw_text = response.text
-        
         cleaned_text = clean_json_string(raw_text)
         data = json.loads(cleaned_text)
-        
-        if isinstance(data, list):
-            if len(data) > 0 and isinstance(data[0], dict):
-                data = data[0]
-            else:
-                data = {}
-
-        log_transaction(source_app, title, body, prompt, raw_text, data)
-        return data
-
+        if isinstance(data, list): data = data[0] if data else {}
+        return data, raw_text
     except Exception as e:
-        print(f"❌ Gemini Processing Error: {e}")
-        log_transaction(source_app, title, body, prompt, raw_text, None, error=e)
-        return None
+        print(f"❌ Gemini Error: {e}")
+        return None, str(e)
 
 def send_news_alert(analysis, original_title, source_app):
     color_map = {"BULLISH": 0x00FF00, "BEARISH": 0xFF0000, "NEUTRAL": 0x3498DB}
     color = color_map.get(analysis.get("sentiment"), 0x95A5A6)
-    action_emoji = {"BUY": "🟢", "SELL": "🔴", "WATCH": "👀", "AVOID": "⛔"}.get(analysis.get('action'), "⚪")
-
+    
     embed = {
-        "title": f"{action_emoji} {analysis.get('action')} {analysis.get('ticker')} | Score: {analysis.get('impact_score')}/100",
-        "description": f"**{analysis.get('headline', original_title)}**\n\n> *Thesis: \"{analysis.get('thesis')}\"*\n> *Risk: \"{analysis.get('counter')}\"*",
+        "title": f"{analysis.get('action')} {analysis.get('ticker')} | {analysis.get('impact_score')}/10",
+        "description": f"**{analysis.get('headline', original_title)}**\n> *{analysis.get('thesis')}*",
         "color": color,
         "fields": [
-            {"name": "Sentiment", "value": analysis.get("sentiment"), "inline": True},
-            {"name": "Source", "value": source_app, "inline": True},
-            {"name": "Timeframe", "value": analysis.get("timeframe"), "inline": True}
+            {"name": "Category", "value": analysis.get("event_category", "N/A"), "inline": True},
+            {"name": "Confidence", "value": f"{analysis.get('ai_confidence')}/10", "inline": True}
         ],
-        "footer": {"text": "Market Mind • AI News"},
-        "timestamp": datetime.datetime.now().isoformat()
+        "footer": {"text": "Market Mind AI"}
     }
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind AI"})
-    except Exception:
-        pass
+        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind"})
+    except: pass
 
-def process_news_queue():
-    print("👷 News Worker Thread Started")
-    while True:
-        try:
-            task = NEWS_QUEUE.get()
-            title, body, source_app = task
-            
-            if not title and body:
-                title = (body[:50] + '...') if len(body) > 50 else body
-            
-            print(f"🔍 Analyzing: {title[:40]}...")
-            analysis = get_gemini_analysis(title, body, source_app)
-            
-            if analysis:
-                if analysis.get("impact_score", 0) >= MIN_IMPACT_SCORE:
-                    send_news_alert(analysis, title, source_app)
-                    print(f"🚀 Alert Sent: {analysis.get('ticker')}")
-                else:
-                    print(f"⚖️  Withheld (Score: {analysis.get('impact_score')})")
-            
-            time.sleep(1) 
-            NEWS_QUEUE.task_done()
-            
-        except Exception as e:
-            print(f"⚠️ Worker Error: {e}")
-
-# ================= MODULE 2: VWAP TECHNICAL MONITOR =================
+# ================= MODULE 2: DATA COLLECTORS =================
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -264,150 +237,174 @@ def get_technical_confluence(ticker):
         df['RSI'] = calculate_rsi(df['Close'], RSI_PERIOD)
         df['Avg_Vol'] = df['Volume'].rolling(window=20).mean()
         df['RVOL'] = df['Volume'] / df['Avg_Vol']
-        
-        return df.iloc[-1]
-    except Exception:
-        return None
 
-def send_vwap_alert(ticker, alert_type, msg, data):
-    color = 0x00FF00 if "LONG" in alert_type else 0xFF0000
-    embed = {
-        "title": f"{alert_type} | {ticker}",
-        "description": f"**{msg}**\n\n> Price: `${float(data['Close']):.2f}`",
-        "color": color,
-        "footer": {"text": "Market Mind • Technicals"}
-    }
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind Tech"})
-    except Exception:
-        pass
+        current_date = df.index[-1].date()
+        day_data = df[df.index.date == current_date]
+        daily_change = 0.0
+        if not day_data.empty:
+            open_price = float(day_data['Open'].iloc[0])
+            close_price = float(day_data['Close'].iloc[-1])
+            if open_price != 0 and not math.isnan(open_price):
+                daily_change = ((close_price - open_price) / open_price) * 100
+
+        result = df.iloc[-1].to_dict()
+        result['daily_change'] = daily_change
+        return result
+    except Exception: return None
 
 def vwap_monitor_loop():
-    print(f"📈 Monitor Started: {len(VWAP_WATCHLIST)} Tickers")
+    print(f"📈 Monitor Started: Tracking {len(VWAP_WATCHLIST)} Assets")
     while True:
-        print(f"🔄 Refreshing VWAP Data...")
         for ticker in VWAP_WATCHLIST:
             try:
-                row = get_technical_confluence(ticker)
-                if row is None: continue
-                
-                price = row['Close']
-                if pd.isna(row['RSI']) or pd.isna(row['VWAP']): continue
-
+                data = get_technical_confluence(ticker)
+                if data is None: continue
+                price = data['Close']
                 status = "NEUTRAL"
-                if price > row['Upper_Band']: status = "OVERBOUGHT"
-                elif price < row['Lower_Band']: status = "OVERSOLD"
+                if price > data['Upper_Band']: status = "OVERBOUGHT"
+                elif price < data['Lower_Band']: status = "OVERSOLD"
 
-                LATEST_VWAP_DATA[ticker] = {
-                    "ticker": ticker,
-                    "name": TICKER_MAP.get(ticker, ticker),
-                    "price": round(float(price), 2),
-                    "vwap": round(float(row['VWAP']), 2),
-                    "rsi": round(float(row['RSI']), 1),
-                    "rvol": round(float(row['RVOL']), 1) if not pd.isna(row['RVOL']) else 0,
-                    "status": status,
-                }
-            except Exception as e:
-                print(f"⚠️ Monitor Error {ticker}: {e}")
+                with DATA_LOCK:
+                    LATEST_VWAP_DATA[ticker] = {
+                        "ticker": ticker,
+                        "name": TICKER_MAP.get(ticker, ticker),
+                        "price": safe_round(price),
+                        "vwap": safe_round(data['VWAP']),
+                        "rsi": safe_round(data['RSI'], 1),
+                        "rvol": safe_round(data['RVOL'], 1),
+                        "daily_change": safe_round(data['daily_change'], 2),
+                        "status": status,
+                    }
+            except Exception: continue
         time.sleep(VWAP_CHECK_INTERVAL)
 
-# ================= MODULE 3: WEBSOCKET LISTENER (ENV CONFIG) =================
+def get_market_regime_from_cache():
+    heatmap = {}
+    vix_val = 0.0
+    with DATA_LOCK:
+        for ticker, data in LATEST_VWAP_DATA.items():
+            heatmap[ticker] = data.get('daily_change', 0.0)
+            if ticker == "^VIX": vix_val = data.get('price', 0.0)
+    return vix_val, json.dumps(heatmap)
+
+def get_session_phase():
+    now = datetime.datetime.now(datetime.timezone.utc)
+    est_hour = (now.hour - 5) % 24 
+    if 4 <= est_hour < 9: return "PRE_MARKET"
+    if 9 <= est_hour < 10: return "MARKET_OPEN"
+    if 10 <= est_hour < 12: return "MORNING_KR"
+    if 12 <= est_hour < 14: return "LUNCH_LULL"
+    if 14 <= est_hour < 16: return "POWER_HOUR"
+    if 16 <= est_hour < 20: return "AFTER_HOURS"
+    return "OVN_FUTURES"
+
+def process_news_queue():
+    print("👷 News Worker Thread Started")
+    while True:
+        try:
+            # Task is now a DICTIONARY
+            task = NEWS_QUEUE.get()
+            
+            # --- EXTRACT RICH METADATA ---
+            title = task.get("title", "")
+            body = task.get("body", "")
+            source_app = task.get("source", "Unknown")
+            
+            if not title and body: title = body[:50]
+
+            vix, sector_json = get_market_regime_from_cache()
+            session = get_session_phase()
+            full_text = f"{title} {body}"
+            embedding = get_text_embedding(full_text)
+            
+            print(f"🔍 Analyzing: {title[:40]}...")
+            analysis, raw_resp = get_gemini_analysis(title, body, source_app)
+            
+            micro_regime = {}
+            if analysis and analysis.get("ticker"):
+                target_ticker = analysis.get("ticker")
+                with DATA_LOCK:
+                    if target_ticker in LATEST_VWAP_DATA:
+                        td = LATEST_VWAP_DATA[target_ticker]
+                        vwap_dist = 0
+                        p, v = td.get('price', 0), td.get('vwap', 0)
+                        if v != 0: vwap_dist = (p - v) / v
+                        micro_regime = {
+                            "rsi": td.get('rsi'),
+                            "rvol": td.get('rvol'),
+                            "vwap_dist": safe_round(vwap_dist * 100, 2)
+                        }
+
+            if analysis:
+                log_transaction(
+                    task, # Pass the whole dict to logging
+                    "", raw_resp, analysis,
+                    market_vix=vix, market_sector_json=sector_json, embedding=embedding,
+                    ticker_rsi=micro_regime.get("rsi"), ticker_rvol=micro_regime.get("rvol"),
+                    ticker_vwap_dist=micro_regime.get("vwap_dist"), session_phase=session
+                )
+                if analysis.get("impact_score", 0) >= MIN_IMPACT_SCORE:
+                    send_news_alert(analysis, title, source_app)
+            time.sleep(0.5)
+            NEWS_QUEUE.task_done()
+        except Exception as e:
+            print(f"⚠️ Worker Error: {e}")
+
+# ================= MODULE 3: LISTENER =================
 
 def fetch_latest_push():
-    """Manually fetches the latest push with delay and debugging."""
-    print("   ⏳ Waiting 2 seconds for API indexing...")
-    time.sleep(2) # <--- CRITICAL FIX for Race Condition
-    
+    time.sleep(2)
     try:
         headers = {"Access-Token": PUSHBULLET_API_KEY}
         resp = requests.get(PUSHBULLET_API_URL, headers=headers)
-        
-        # DEBUG PRINT: Verify what the API actually replies
-        print(f"   📥 API Response: {resp.status_code}") 
-        
         if resp.status_code == 200:
-            data = resp.json()
-            pushes = data.get("pushes", [])
-            
-            if pushes:
-                latest = pushes[0]
-                # Filter out dismissed/inactive pushes if necessary
-                if latest.get('active'):
-                    print(f"   ✅ Fetched: {latest.get('title', 'No Title')}")
-                    return latest
-                else:
-                    print("   🗑️ Latest push is marked inactive/dismissed.")
-            else:
-                print("   ⚠️ API returned 200 OK, but list is empty.")
-                print(f"   🔎 Raw Data: {data}") # See if 'accounts' or other data exists
-        else:
-            print(f"   ❌ API Error: {resp.text}")
-            
-    except Exception as e:
-        print(f"   ⚠️ Fetch Error: {e}")
+            pushes = resp.json().get("pushes", [])
+            if pushes: return pushes[0]
+    except Exception: pass
     return None
-
-def handle_push_content(push):
-    p_type = push.get('type')
-    title = push.get('title', '')
-    body = push.get('body', '')
-    app_name = push.get("application_name", "Unknown App")
-    
-    print(f"📦 Processing: {p_type} | {app_name} | {title[:30]}...")
-
-    # --- MODIFIED: REMOVED ALL FILTERS ---
-    # We now accept 'mirror' (apps) and 'note' (manual pushes) unconditionally.
-    if p_type in ["mirror", "note"]:
-        # If the app name is missing, use a fallback so the DB doesn't crash
-        safe_source = app_name if app_name else "Pushbullet Raw"
-        
-        print(f"✅ Queueing: {safe_source}")
-        NEWS_QUEUE.put((title, body, safe_source))
-        
-    else:
-        print(f"⚠️ Skipped unsupported type: {p_type}")
 
 def on_message(ws, message):
     try:
         data = json.loads(message)
-        msg_type = data.get("type")
-
-        if msg_type == "nop": return
-
-        if msg_type == "tickle" and data.get("subtype") == "push":
-            print("🔔 Tickle received! Fetching latest push...")
+        
+        # 1. SERVER PUSHES (Notes/Links) - No Icon usually
+        if data.get("type") == "tickle" and data.get("subtype") == "push":
             latest = fetch_latest_push()
             if latest:
-                handle_push_content(latest)
-        
-        elif msg_type == "push":
-            handle_push_content(data.get("push", {}))
+                if latest.get('type') in ["mirror", "note"]:
+                    NEWS_QUEUE.put({
+                        "title": latest.get('title', ''),
+                        "body": latest.get('body', ''),
+                        "source": latest.get("application_name", "Pushbullet"),
+                        "package": None,
+                        "icon": None 
+                    })
 
-    except Exception as e:
-        print(f"⚠️ WS Msg Error: {e}")
+        # 2. EPHEMERALS (Mirrored Notifications) - HAS ICON & PACKAGE
+        elif data.get("type") == "push":
+            push = data.get("push", {})
+            
+            # Filter: Ignore "dismissal" and "clip" (clipboard)
+            if push.get('type') == 'mirror':
+                app_name = push.get("application_name", "Unknown App")
+                package = push.get("package_name", None) # Normalize source
+                icon = push.get("icon", None) # Base64 Image
+                
+                NEWS_QUEUE.put({
+                    "title": push.get('title', ''),
+                    "body": push.get('body', ''),
+                    "source": app_name,
+                    "package": package,
+                    "icon": icon
+                })
+                print(f"📱 Mirror: {app_name} ({package})")
 
-def on_error(ws, error):
-    print(f"🔴 WebSocket Error: {error}")
-
-def on_close(ws, close_status_code, close_msg):
-    print("⚠️ Connection Closed")
+    except Exception: pass
 
 def start_listening():
-    # Use the variable loaded from .env
     ws_url = f"{PUSHBULLET_STREAM_URL}{PUSHBULLET_API_KEY}"
-    
     while True:
         try:
-            print(f"🎧 News Listener Connecting...")
-            ws = websocket.WebSocketApp(
-                ws_url,
-                on_open=lambda ws: print("✅ News Listener Connected"),
-                on_message=on_message,
-                on_error=on_error,
-                on_close=on_close
-            )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            print(f"❌ Connection Failed: {e}")
-            time.sleep(10)
-        time.sleep(5)
+            ws = websocket.WebSocketApp(ws_url, on_message=on_message)
+            ws.run_forever()
+        except Exception: time.sleep(5)
