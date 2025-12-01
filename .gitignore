@@ -19,3 +19,5 @@ yarn-error.log*
 # --- IDEs ---
 .vscode/
 .idea/
+backend/market_mind.db
+backend/market_mind.db
