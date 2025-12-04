@@ -4,6 +4,8 @@ import math
 import json
 from config import DB_FILE
 
+from contextlib import contextmanager
+
 def safe_round(val, digits=2):
     try:
         if val is None: return 0.0
@@ -13,9 +15,18 @@ def safe_round(val, digits=2):
     except Exception:
         return 0.0
 
+@contextmanager
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row # Return rows as dict-like objects
+    try:
+        yield conn
+    finally:
+        conn.close()
+
 def init_db():
     try:
-        with sqlite3.connect(DB_FILE) as conn:
+        with get_db_connection() as conn:
             conn.execute('PRAGMA journal_mode=WAL;') 
             c = conn.cursor()
             
@@ -24,7 +35,6 @@ def init_db():
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             timestamp TEXT,
                             source_app TEXT,
-                            source_package TEXT,
                             source_package TEXT,
                             title TEXT,
                             body TEXT,
@@ -85,9 +95,30 @@ def init_db():
                             sentiment TEXT,
                             impact_score INTEGER,
                             related_ticker TEXT,
+                            category TEXT,
                             ai_analysis_json TEXT,
-                            embedding BLOB
+                            embedding BLOB,
+                            context_json TEXT
                         )''')
+            
+            # Migration: Add category column if it doesn't exist
+            try:
+                c.execute("ALTER TABLE news_events ADD COLUMN category TEXT")
+            except sqlite3.OperationalError:
+                pass # Column likely already exists
+
+            # Migration: Add context_json column if it doesn't exist
+            try:
+                c.execute("ALTER TABLE news_events ADD COLUMN context_json TEXT")
+            except sqlite3.OperationalError:
+                pass # Column likely already exists
+
+            # Index for faster category lookup in logs (Legacy but still used)
+            c.execute("CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(event_category)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_events_category ON news_events(category)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_events_ticker ON news_events(related_ticker)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_ticker_time ON news_events(related_ticker, timestamp DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_category_time ON news_events(category, timestamp DESC)")
 
             # 4. Daily Reports
             c.execute('''CREATE TABLE IF NOT EXISTS daily_reports (
@@ -97,6 +128,11 @@ def init_db():
                             created_at TEXT
                         )''')
             
+
+
+
+
+
             conn.commit()
         print(f"✅ Database initialized: {DB_FILE}")
     except Exception as e:
@@ -108,7 +144,7 @@ def log_market_data(timestamp, ticker_data):
     ticker_data: List of dicts with keys: ticker, open, high, low, close, volume, vwap, rsi, rvol
     """
     try:
-        with sqlite3.connect(DB_FILE) as conn:
+        with get_db_connection() as conn:
             c = conn.cursor()
             c.executemany('''INSERT OR REPLACE INTO market_data 
                              (timestamp, ticker, open, high, low, close, volume, vwap, rsi, rvol)
@@ -145,11 +181,23 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
         # Confidence
         confidence = analysis.get("confidence") or analysis.get("ai_confidence")
 
+        # Construct Context JSON
+        context_data = {
+            "macro": macro_context,
+            "micro": micro_regime,
+            "session": session_phase,
+            "sectors": sector_json,
+            "novelty": analysis.get("novelty_score", 0),
+            "confidence": confidence,
+            "thesis": thesis,
+            "source_pkg": data_pack.get("package")
+        }
+
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
             c.execute('''INSERT INTO news_events 
-                         (timestamp, source_app, title, body, sentiment, impact_score, related_ticker, ai_analysis_json, embedding)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         (timestamp, source_app, title, body, sentiment, impact_score, related_ticker, category, ai_analysis_json, embedding, context_json)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                       (timestamp, 
                        data_pack.get("source"), 
                        data_pack.get("title"), 
@@ -157,67 +205,20 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
                        sentiment, 
                        analysis.get("impact_score", 0),
                        primary_ticker,
+                       category,
                        json.dumps(analysis),
-                       embedding))
-            conn.commit()
-            
-            # Also log to legacy table for now to keep frontend working
-            c.execute('''INSERT INTO logs (
-                            timestamp, source_app, source_package,
-                            title, body, ticker, 
-                            impact_score, thesis, sentiment, status,
-                            market_vix, market_sector_json, text_embedding,
-                            ticker_rsi, ticker_rvol, ticker_vwap_dist,
-                            session_phase, event_category, novelty_score, ai_confidence,
-                            price_spy, price_qqq, price_iwm, yield_10y, price_dxy, price_btc,
-                            days_until_fomc, days_until_cpi, days_until_nfp,
-                            sector_rel_strength, spy_200d_sma_dist, market_breadth
-                        )
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUCCESS', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                      (timestamp, 
-                       data_pack.get("source"),
-                       data_pack.get("package"),
-                       data_pack.get("title"), 
-                       data_pack.get("body"),
-                       primary_ticker,
-                       analysis.get("impact_score", 0), 
-                       thesis, 
-                       sentiment,
-                       
-                       macro_context.get("market_vix"),
-                       sector_json,
                        embedding,
-                       
-                       micro_regime.get("rsi"),
-                       micro_regime.get("rvol"),
-                       micro_regime.get("vwap_dist"),
-                       
-                       session_phase,
-                       category, 
-                       analysis.get("novelty_score", 0),
-                       confidence,
-                       
-                       macro_context.get("price_spy"),
-                       macro_context.get("price_qqq"),
-                       macro_context.get("price_iwm"),
-                       macro_context.get("yield_10y"),
-                       macro_context.get("price_dxy"),
-                       macro_context.get("price_btc"),
-                       
-                       macro_context.get("days_until_fomc"),
-                       macro_context.get("days_until_cpi"),
-                       macro_context.get("days_until_nfp"),
-                       
-                       macro_context.get("sector_rel_strength"),
-                       macro_context.get("spy_200d_sma_dist"),
-                       macro_context.get("market_breadth")
-                       ))
+                       json.dumps(context_data)))
             conn.commit()
+            return c.lastrowid # Return ID for deep dive linking
             
     except Exception as e:
         print(f"⚠️ News Logging Failed: {e}")
+        return None
 
-# Deprecated but kept for compatibility if needed elsewhere
-def log_transaction(*args, **kwargs):
-    pass 
+
+
+
+
+
 

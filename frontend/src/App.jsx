@@ -12,6 +12,7 @@ const API_BASE = "";
 
 export default function MarketMindDashboard() {
   const [activeTab, setActiveTab] = useState('feed');
+  const [selectedItemId, setSelectedItemId] = useState(null);
   const [updates, setUpdates] = useState([]);
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -117,11 +118,11 @@ export default function MarketMindDashboard() {
     setSearchTerm("");
   };
 
-  const availableCategories = React.useMemo(() => ["ALL", ...new Set(updates.flatMap(u => u.tags || []))].filter(Boolean), [updates]);
-  const availableSources = React.useMemo(() => ["ALL", ...new Set(updates.map(u => u.source))].filter(Boolean), [updates]);
-  const availableSessions = React.useMemo(() => ["ALL", ...new Set(updates.map(u => u.ml_context?.session))].filter(Boolean), [updates]);
+  const availableCategories = ["ALL", ...new Set(updates.flatMap(u => u.tags || []))].filter(Boolean);
+  const availableSources = ["ALL", ...new Set(updates.map(u => u.source))].filter(Boolean);
+  const availableSessions = ["ALL", ...new Set(updates.map(u => u.ml_context?.session))].filter(Boolean);
 
-  const filteredUpdates = React.useMemo(() => updates.filter(item => {
+  const filteredUpdates = updates.filter(item => {
     const matchesSearch = item.headline?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (item.summary && item.summary.toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesScore = (item.relevanceScore || 0) >= minRelevance;
@@ -132,7 +133,7 @@ export default function MarketMindDashboard() {
     const matchesSource = selectedSource === "ALL" || item.source === selectedSource;
     const matchesSession = selectedSession === "ALL" || item.ml_context?.session === selectedSession;
     return matchesSearch && matchesScore && matchesConfidence && matchesNovelty && matchesCategory && matchesSentiment && matchesSource && matchesSession;
-  }), [updates, searchTerm, minRelevance, minConfidence, minNovelty, selectedCategory, selectedSentiment, selectedSource, selectedSession]);
+  });
 
   const marqueeDuration = Math.max(60, signals.length * 5);
 

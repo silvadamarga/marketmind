@@ -10,7 +10,7 @@ from config import (
     MACRO_TICKERS, SECTOR_TICKERS, CALENDAR_EVENTS, VWAP_BANDS, RSI_PERIOD
 )
 from database import safe_round, log_market_data
-from analysis import calculate_rsi
+
 
 # --- STATE ---
 DATA_LOCK = threading.Lock()
@@ -166,8 +166,7 @@ def macro_monitor_loop():
             print(f"⚠️ Macro Monitor Error: {e}")
         time.sleep(900) # 15 minutes
 
-from database import safe_round, log_market_data
-from analysis import calculate_rsi
+
 
 # ... (Previous code remains same until vwap_monitor_loop)
 

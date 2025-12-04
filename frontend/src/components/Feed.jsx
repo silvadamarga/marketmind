@@ -32,7 +32,10 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan,
                             </div>
                         ) : (
                             filteredUpdates.map((update) => (
-                                <FeedCard key={update.id} update={update} />
+                                <FeedCard 
+                                    key={update.id} 
+                                    update={update} 
+                                />
                             ))
                         )}
 

@@ -27,10 +27,13 @@ const AIBadge = ({ icon: Icon, label, value, colorClass }) => {
     );
 };
 
-const FeedCard = ({ update }) => {
-    const isHighImpact = update.impact === 'CRITICAL' || update.impact === 'HIGH' || (update.novelty_score || 0) >= 6;
-    // Default to expanded if high impact, compact otherwise
-    const [isExpanded, setIsExpanded] = useState(isHighImpact);
+const FeedCard = (props) => {
+    const { update } = props;
+    const isHighImpact = update.impact === 'CRITICAL' || update.impact === 'HIGH' || (update.novelty_score || 0) >= 8;
+    // Default to compact for all cards
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [deepDiveContent, setDeepDiveContent] = useState(update.deep_dive || null);
+    const [isDeepDiveLoading, setIsDeepDiveLoading] = useState(false);
 
     const isNoise = (update.relevanceScore || 0) < 3;
     const { confidence } = update.ml_context || {};
@@ -45,8 +48,93 @@ const FeedCard = ({ update }) => {
     const cardStyle = impactStyles[update.impact] || impactStyles.LOW;
 
     const handleToggle = (e) => {
-        // Prevent toggling if clicking on interactive elements if any (none for now)
+        // If onClick prop is provided (for navigation), use it
+        if (props.onClick) {
+            props.onClick();
+            return;
+        }
+        // Otherwise toggle expansion
         setIsExpanded(!isExpanded);
+    };
+
+    const handleDeepDive = async (e) => {
+        e.stopPropagation();
+        if (!update.tags || update.tags.length === 0) return;
+        
+        const ticker = update.tags.find(t => t === update.related_ticker) || update.tags[0];
+        if (!ticker) return;
+
+        setIsDeepDiveLoading(true);
+        try {
+            const res = await fetch(`http://localhost:8000/api/analysis/context/${ticker}`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (data.analysis) {
+                setDeepDiveContent(data.analysis);
+            }
+        } catch (err) {
+            console.error("Deep Dive Failed", err);
+        } finally {
+            setIsDeepDiveLoading(false);
+        }
+    };
+
+    const renderDeepDive = (content) => {
+        if (!content) return null;
+        // Handle both JSON object and legacy string/markdown
+        if (typeof content === 'string') {
+             return (
+                <div className="prose prose-invert prose-sm max-w-none text-slate-300 whitespace-pre-wrap">
+                    {content}
+                </div>
+             );
+        }
+
+        return (
+            <div className="space-y-3">
+                {/* Executive Summary */}
+                {content.executive_summary && (
+                    <div className="text-slate-300 text-sm italic border-l-2 border-indigo-500 pl-3">
+                        {content.executive_summary}
+                    </div>
+                )}
+
+                {/* Verdict Badge */}
+                {content.verdict && (
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-500 uppercase">Verdict:</span>
+                        <span className={`text-xs px-2 py-0.5 rounded font-bold ${
+                            content.verdict === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' :
+                            content.verdict === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
+                            'bg-slate-700 text-slate-300'
+                        }`}>
+                            {content.verdict}
+                        </span>
+                    </div>
+                )}
+
+                {/* Drivers */}
+                {content.key_drivers && content.key_drivers.length > 0 && (
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 uppercase mb-1">Key Drivers</div>
+                        <ul className="list-disc list-inside text-xs text-slate-400 space-y-0.5">
+                            {content.key_drivers.map((driver, i) => (
+                                <li key={i}>{driver}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+                
+                 {/* Technicals */}
+                 {content.technical_outlook && content.technical_outlook !== "Insufficient data" && (
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 uppercase mb-1">Technicals</div>
+                        <p className="text-xs text-slate-400">{content.technical_outlook}</p>
+                    </div>
+                )}
+            </div>
+        );
     };
 
     return (
@@ -58,7 +146,7 @@ const FeedCard = ({ update }) => {
                 <div className="flex-1 min-w-0">
                     {/* Meta Row */}
                     <div className="flex items-center space-x-2 mb-1.5 opacity-75 text-[10px]">
-                        <span className={`font-bold tracking-wider uppercase text-blue-400`}>
+                        <span className={`font-bold tracking-wider uppercase ${isHighImpact ? 'text-blue-400' : 'text-slate-500'}`}>
                             {update.headline || update.source || "UNKNOWN"}
                         </span>
                         <span className="text-slate-600">•</span>
@@ -70,7 +158,7 @@ const FeedCard = ({ update }) => {
                     </div>
 
                     {/* Headline */}
-                    <h3 className={`font-bold leading-snug ${isExpanded ? 'text-lg mb-3 text-slate-100' : 'text-sm mb-0 text-slate-300'}`}>
+                    <h3 className={`font-bold leading-snug text-lg text-slate-200'`}>
                         {update.title || update.headline}
                     </h3>
 
@@ -83,7 +171,7 @@ const FeedCard = ({ update }) => {
                             {update.thesis && (
                                 <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
                                     <div className="flex items-center gap-2 mb-1 text-xs font-bold text-indigo-400 uppercase tracking-wider">
-                                        <Zap size={12} /> AI Thesis
+                                        <Zap size={12} /> Thesis
                                     </div>
                                     <p className="text-slate-300 text-sm italic">
                                         "{update.thesis}"
@@ -92,35 +180,51 @@ const FeedCard = ({ update }) => {
                             )}
 
                             {/* Tags Row */}
-                            <div className="flex flex-wrap items-center gap-2 mt-2">
-                                {/* Sentiment */}
-                                {update.sentiment && update.sentiment !== 'NEUTRAL' && (
-                                    <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${update.sentiment === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-                                            'bg-red-500/10 border-red-500/30 text-red-400'
-                                        }`}>
-                                        {update.sentiment}
-                                    </span>
-                                )}
-                                
-                                {/* Action */}
-                                {update.action && update.action !== 'WATCH' && (
-                                     <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
-                                        {update.action}
-                                     </span>
-                                )}
+                            <div className="flex flex-wrap items-center gap-2 mt-2 justify-between">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {/* Sentiment */}
+                                    {update.sentiment && update.sentiment !== 'NEUTRAL' && (
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${update.sentiment === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+                                                'bg-red-500/10 border-red-500/30 text-red-400'
+                                            }`}>
+                                            {update.sentiment}
+                                        </span>
+                                    )}
+                                    
+                                    {/* Action */}
+                                    {update.action && update.action !== 'WATCH' && (
+                                         <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
+                                            {update.action}
+                                         </span>
+                                    )}
 
-                                {/* Tags (Tickers/Categories) */}
-                                {update.tags && update.tags.map(tag => (
-                                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
-                                        {tag}
-                                    </span>
-                                ))}
+                                    {/* Tags (Tickers/Categories) */}
+                                    {update.tags && update.tags.map(tag => (
+                                        <span key={tag} className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
+                                            {tag}
+                                        </span>
+                                    ))}
 
-                                {/* Timeframe */}
-                                {update.timeframe && (
-                                     <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 font-medium">
-                                        {update.timeframe}
-                                     </span>
+                                    {/* Timeframe */}
+                                    {update.timeframe && (
+                                         <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 font-medium">
+                                            {update.timeframe}
+                                         </span>
+                                    )}
+                                </div>
+
+                                {/* Google Search Button */}
+                                {update.tags && update.tags.length > 0 && (
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            window.open(`https://www.google.com/search?q=${encodeURIComponent(update.title || update.headline)}`, '_blank');
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold transition-colors border border-slate-600"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                        Google Search
+                                    </button>
                                 )}
                             </div>
                         </div>
@@ -135,7 +239,7 @@ const FeedCard = ({ update }) => {
                         <div className="flex space-x-0.5">
                             {[...Array(5)].map((_, i) => (
                                 <div key={i} className={`rounded-sm ${isExpanded ? 'w-1.5 h-4' : 'w-1 h-2'} ${i < (update.relevanceScore / 2) ? 
-                                    (update.relevanceScore >= 8 ? 'bg-red-500' : update.relevanceScore >= 5 ? 'bg-amber-500' : 'bg-blue-500') 
+                                    (update.relevanceScore >= 8 ? 'bg-red-500' : update.relevanceScore >= 7 ? 'bg-amber-500' : 'bg-blue-500') 
                                     : 'bg-slate-800'}`} 
                                 />
                             ))}

@@ -9,76 +9,108 @@ import monitor
 
 NEWS_QUEUE = queue.Queue()
 
+
+def extract_metadata(task):
+    """Extracts basic metadata from the task."""
+    title = task.get("title", "")
+    body = task.get("body", "")
+    source_app = task.get("source", "Unknown")
+    if not title and body: title = body[:50]
+    return title, body, source_app
+
+def fetch_market_context():
+    """Fetches current market context (macro, session, sector)."""
+    vix, sector_json = monitor.get_market_regime_from_cache()
+    macro_data = {}
+    with monitor.DATA_LOCK:
+        macro_data = monitor.LATEST_MACRO_CONTEXT.copy()
+    session = monitor.get_session_phase()
+    return macro_data, session, sector_json
+
+def get_micro_regime(analysis):
+    """Calculates micro regime (RSI, RVOL, VWAP) for the primary ticker."""
+    micro_regime = {}
+    target_ticker = None
+    
+    if analysis:
+        if analysis.get("tickers") and isinstance(analysis["tickers"], list) and len(analysis["tickers"]) > 0:
+            target_ticker = analysis["tickers"][0]
+        elif analysis.get("ticker"): # Fallback
+            target_ticker = analysis.get("ticker")
+    
+    if target_ticker:
+        with monitor.DATA_LOCK:
+            if target_ticker in monitor.LATEST_VWAP_DATA:
+                td = monitor.LATEST_VWAP_DATA[target_ticker]
+                vwap_dist = 0
+                p, v = td.get('price', 0), td.get('vwap', 0)
+                if v != 0: vwap_dist = (p - v) / v
+                micro_regime = {
+                    "rsi": td.get('rsi'),
+                    "rvol": td.get('rvol'),
+                    "vwap_dist": safe_round(vwap_dist * 100, 2)
+                }
+    return micro_regime
+
+def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regime, session, sector_json, source_app, title):
+    """Handles logging to DB and sending alerts."""
+    if not analysis:
+        return
+
+    # --- CONDITIONAL EMBEDDING ---
+    embedding = None
+    impact = analysis.get("impact_score", 0)
+    if impact >= 5: # Threshold for "worth remembering"
+        embedding = get_text_embedding(full_text)
+
+    log_news_event(
+        task, 
+        analysis,
+        embedding=embedding,
+        macro_context=macro_data,
+        micro_regime=micro_regime,
+        session_phase=session,
+        sector_json=sector_json
+    )
+    
+    if impact >= MIN_IMPACT_SCORE:
+        # Filter: High Impact OR High Novelty
+        novelty = analysis.get("novelty_score", 0)
+        
+        from config import IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH
+        
+        if impact >= IMPACT_THRESHOLD_HIGH or novelty >= NOVELTY_THRESHOLD_HIGH:
+            send_news_alert(analysis, title, source_app)
+        else:
+            print(f"📉 Skipped Low Impact/Novelty: Impact={impact}, Novelty={novelty}")
+
 def process_news_queue():
     print("👷 News Worker Thread Started")
     while True:
         try:
-            # Task is now a DICTIONARY
             task = NEWS_QUEUE.get()
             
-            # --- EXTRACT RICH METADATA ---
-            title = task.get("title", "")
-            body = task.get("body", "")
-            source_app = task.get("source", "Unknown")
-            
-            if not title and body: title = body[:50]
-
-            vix, sector_json = monitor.get_market_regime_from_cache()
-            
-            # Get Macro Context
-            macro_data = {}
-            with monitor.DATA_LOCK:
-                macro_data = monitor.LATEST_MACRO_CONTEXT.copy()
-
-            session = monitor.get_session_phase()
+            # 1. Extract Metadata
+            title, body, source_app = extract_metadata(task)
             full_text = f"{title} {body}"
-            embedding = get_text_embedding(full_text)
+            
+            # 2. Fetch Context
+            macro_data, session, sector_json = fetch_market_context()
             
             print(f"🔍 Analyzing: {title[:40]}...")
+            
+            # 3. Analyze
             analysis, raw_resp = get_gemini_analysis(title, body, source_app)
             
-            micro_regime = {}
-            # Handle new list format for tickers
-            target_ticker = None
-            if analysis and analysis.get("tickers") and isinstance(analysis["tickers"], list) and len(analysis["tickers"]) > 0:
-                target_ticker = analysis["tickers"][0]
-            elif analysis and analysis.get("ticker"): # Fallback
-                target_ticker = analysis.get("ticker")
+            # 4. Get Micro Regime
+            micro_regime = get_micro_regime(analysis)
 
-            if target_ticker:
-                with monitor.DATA_LOCK:
-                    if target_ticker in monitor.LATEST_VWAP_DATA:
-                        td = monitor.LATEST_VWAP_DATA[target_ticker]
-                        vwap_dist = 0
-                        p, v = td.get('price', 0), td.get('vwap', 0)
-                        if v != 0: vwap_dist = (p - v) / v
-                        micro_regime = {
-                            "rsi": td.get('rsi'),
-                            "rvol": td.get('rvol'),
-                            "vwap_dist": safe_round(vwap_dist * 100, 2)
-                        }
+            # 5. Log and Alert
+            handle_logging_and_alerts(
+                task, analysis, full_text, macro_data, micro_regime, 
+                session, sector_json, source_app, title
+            )
 
-            if analysis:
-                log_news_event(
-                    task, 
-                    analysis,
-                    embedding=embedding,
-                    macro_context=macro_data,
-                    micro_regime=micro_regime,
-                    session_phase=session,
-                    sector_json=sector_json
-                )
-                if analysis.get("impact_score", 0) >= MIN_IMPACT_SCORE:
-                    # Filter: High Impact OR High Novelty
-                    impact = analysis.get("impact_score", 0)
-                    novelty = analysis.get("novelty_score", 0)
-                    
-                    from config import IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH
-                    
-                    if impact >= IMPACT_THRESHOLD_HIGH or novelty >= NOVELTY_THRESHOLD_HIGH:
-                        send_news_alert(analysis, title, source_app)
-                    else:
-                        print(f"📉 Skipped Low Impact/Novelty: Impact={impact}, Novelty={novelty}")
             time.sleep(0.5)
             NEWS_QUEUE.task_done()
         except Exception as e:

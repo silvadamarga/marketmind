@@ -37,7 +37,7 @@ export default function Sidebar({ activeTab, setActiveTab, leftOpen, loading, la
             )}
             <nav className="flex-1 px-4 space-y-2 overflow-hidden pt-6">
                 <SidebarItem icon={LayoutGrid} label="Live Intelligence" active={activeTab === 'feed'} onClick={() => handleItemClick('feed')} />
-                <SidebarItem icon={Calendar} label="Daily Analysis" active={activeTab === 'daily'} onClick={() => handleItemClick('daily')} />
+                <SidebarItem icon={Calendar} label="Daily Briefing" active={activeTab === 'daily'} onClick={() => handleItemClick('daily')} />
                 <SidebarItem icon={BarChart3} label="Weekly Analysis" active={activeTab === 'weekly'} onClick={() => handleItemClick('weekly')} />
                 <SidebarItem icon={Radio} label="Verified Sources" active={activeTab === 'sources'} onClick={() => handleItemClick('sources')} />
                 <SidebarItem icon={Settings} label="System Config" active={activeTab === 'settings'} onClick={() => handleItemClick('settings')} />

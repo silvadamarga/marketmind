@@ -6,6 +6,7 @@ import io
 import csv
 import datetime
 import time
+from functools import lru_cache
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -15,8 +16,7 @@ from contextlib import asynccontextmanager
 import bot_logic
 import ingestor
 import monitor
-from analysis import generate_daily_report
-from database import init_db, DB_FILE
+from database import init_db, DB_FILE, get_db_connection
 
 # --- LIFECYCLE MANAGER ---
 @asynccontextmanager
@@ -41,89 +41,143 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- HELPER FUNCTIONS ---
+def format_news_event(row):
+    """Formats a database row into a standardized API response object."""
+    score = row["impact_score"] if row["impact_score"] else 0
+    display_score = score if score <= 10 else round(score / 10)
+    
+    impact_label = "LOW"
+    if display_score >= 9: impact_label = "CRITICAL"
+    elif display_score >= 7: impact_label = "HIGH"
+    elif display_score >= 5: impact_label = "MEDIUM"
+
+    context = {}
+    if row["context_json"]:
+        try: context = json.loads(row["context_json"])
+        except: pass
+    
+    macro = context.get("macro", {})
+    micro = context.get("micro", {})
+    sector_data = context.get("sectors", {})
+    thesis = context.get("thesis", "")
+    confidence = context.get("confidence", 0)
+    novelty = context.get("novelty", 0)
+    source_pkg = context.get("source_pkg", None)
+
+    tags = []
+    if row["related_ticker"]: tags.append(row["related_ticker"])
+    if row["category"]: tags.append(row["category"])
+
+    # Try to parse full analysis JSON if available (for single item view)
+    analysis_details = {}
+    if "ai_analysis_json" in row.keys() and row["ai_analysis_json"]:
+            try: analysis_details = json.loads(row["ai_analysis_json"])
+            except: pass
+
+    return {
+        "id": row["id"],
+        "title": row["body"], 
+        "headline": row["title"], 
+        "source": row["source_app"],
+        "source_pkg": source_pkg,
+        "icon": None,
+        "date": row["timestamp"],
+        "relevanceScore": display_score,
+        "impact": impact_label,
+        "sentiment": row["sentiment"] or "NEUTRAL",
+        "summary": thesis,
+        "thesis": thesis,
+        "tags": tags,
+        "ml_context": {
+            "vix": macro.get("market_vix"),
+            "rsi": micro.get("rsi"),
+            "rvol": micro.get("rvol"),
+            "session": context.get("session"),
+            "sectors": sector_data,
+            "confidence": confidence,
+            "novelty": novelty
+        },
+        "novelty_score": novelty,
+        "full_analysis": analysis_details
+    }
+
 # --- API ENDPOINTS ---
+
+
 
 @app.get("/api/feed")
 def get_intelligence_feed(before_id: int = None, limit: int = 50):
     try:
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             
             query = """
-                SELECT id, title, source_app, source_package, 
-                       timestamp, impact_score, sentiment, body, ticker, thesis,
-                       market_vix, market_sector_json, 
-                       ticker_rsi, ticker_rvol, session_phase,
-                       event_category, ai_confidence, novelty_score
-                FROM logs 
-                WHERE status = 'SUCCESS'
+                SELECT id, title, source_app, timestamp, impact_score, sentiment, body, related_ticker, category, ai_analysis_json, context_json
+                FROM news_events 
+                ORDER BY timestamp DESC LIMIT ?
             """
-            params = []
             
+            params = []
             if before_id:
-                query += " AND id < ?"
+                query = """
+                    SELECT id, title, source_app, timestamp, impact_score, sentiment, body, related_ticker, category, ai_analysis_json, context_json
+                    FROM news_events 
+                    WHERE id < ?
+                    ORDER BY timestamp DESC LIMIT ?
+                """
                 params.append(before_id)
-                
-            query += " ORDER BY id DESC LIMIT ?"
+            
             params.append(limit)
             
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            results = []
-            for row in rows:
-                score = row["impact_score"] if row["impact_score"] else 0
-                display_score = score if score <= 10 else round(score / 10)
-                
-                impact_label = "LOW"
-                if display_score >= 9: impact_label = "CRITICAL"
-                elif display_score >= 7: impact_label = "HIGH"
-                elif display_score >= 5: impact_label = "MEDIUM"
-
-                sector_data = {}
-                if row["market_sector_json"]:
-                    try: sector_data = json.loads(row["market_sector_json"])
-                    except: pass
-
-                tags = []
-                if row["ticker"]: tags.append(row["ticker"])
-                if row["event_category"]: tags.append(row["event_category"])
-
-                results.append({
-                    "id": row["id"],
-                    "title": row["body"], 
-                    "headline": row["title"], 
-                    "source": row["source_app"],
-                    "source_pkg": row["source_package"],
-                    "icon": None,
-                    "date": row["timestamp"],
-                    "relevanceScore": display_score,
-                    "impact": impact_label,
-                    "sentiment": row["sentiment"] or "NEUTRAL",
-                    "summary": row["thesis"] if row["thesis"] else "",
-                    "thesis": row["thesis"],
-                    "tags": tags,
-                    "ml_context": {
-                        "vix": row["market_vix"],
-                        "rsi": row["ticker_rsi"],
-                        "rvol": row["ticker_rvol"],
-                        "session": row["session_phase"],
-                        "sectors": sector_data,
-                        "confidence": row["ai_confidence"],
-                        "novelty": row["novelty_score"]
-                    },
-                    "novelty_score": row["novelty_score"]
-                })
+            
+            results = [format_news_event(row) for row in rows]
             return results
     except Exception as e:
         print(f"API Error: {e}")
         return []
 
+@app.get("/api/feed/{item_id}")
+def get_intelligence_item(item_id: int):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT id, title, source_app, timestamp, impact_score, sentiment, body, related_ticker, category, ai_analysis_json, context_json
+                FROM news_events 
+                WHERE id = ?
+            """
+            cursor.execute(query, (item_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return {"error": "Item not found"}
+
+            return format_news_event(row)
+    except Exception as e:
+        print(f"API Error: {e}")
+        return {"error": str(e)}
+
+# Simple time-based cache for weekly analysis (10 minutes)
+WEEKLY_CACHE = {
+    "data": None,
+    "timestamp": 0
+}
+
 @app.get("/api/analysis/weekly")
 def get_weekly_analysis():
+    global WEEKLY_CACHE
+    current_time = time.time()
+    
+    # Return cached data if valid (less than 10 minutes old)
+    if WEEKLY_CACHE["data"] and (current_time - WEEKLY_CACHE["timestamp"] < 600):
+        return WEEKLY_CACHE["data"]
+
     try:
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             
             # Calculate 7 days ago
@@ -132,8 +186,8 @@ def get_weekly_analysis():
             # 1. Total Events & Sentiment
             cursor.execute("""
                 SELECT sentiment, COUNT(*) as count 
-                FROM logs 
-                WHERE timestamp >= ? AND status = 'SUCCESS'
+                FROM news_events 
+                WHERE timestamp >= ?
                 GROUP BY sentiment
             """, (seven_days_ago,))
             sentiment_rows = cursor.fetchall()
@@ -148,31 +202,31 @@ def get_weekly_analysis():
 
             # 2. Top Tickers
             cursor.execute("""
-                SELECT ticker, COUNT(*) as count 
-                FROM logs 
-                WHERE timestamp >= ? AND status = 'SUCCESS' AND ticker IS NOT NULL AND ticker != ''
-                GROUP BY ticker 
+                SELECT related_ticker, COUNT(*) as count 
+                FROM news_events 
+                WHERE timestamp >= ? AND related_ticker IS NOT NULL AND related_ticker != ''
+                GROUP BY related_ticker 
                 ORDER BY count DESC 
                 LIMIT 5
             """, (seven_days_ago,))
-            top_tickers = [{"name": row["ticker"], "count": row["count"]} for row in cursor.fetchall()]
+            top_tickers = [{"name": row["related_ticker"], "count": row["count"]} for row in cursor.fetchall()]
 
             # 3. Top Categories
             cursor.execute("""
-                SELECT event_category, COUNT(*) as count 
-                FROM logs 
-                WHERE timestamp >= ? AND status = 'SUCCESS' AND event_category IS NOT NULL
-                GROUP BY event_category 
+                SELECT category, COUNT(*) as count 
+                FROM news_events 
+                WHERE timestamp >= ? AND category IS NOT NULL
+                GROUP BY category 
                 ORDER BY count DESC 
                 LIMIT 5
             """, (seven_days_ago,))
-            top_categories = [{"name": row["event_category"], "count": row["count"]} for row in cursor.fetchall()]
+            top_categories = [{"name": row["category"], "count": row["count"]} for row in cursor.fetchall()]
 
             # 4. Critical Events (Week in Review)
             cursor.execute("""
                 SELECT id, title, body, impact_score, timestamp, source_app
-                FROM logs 
-                WHERE timestamp >= ? AND status = 'SUCCESS' AND impact_score >= 8
+                FROM news_events 
+                WHERE timestamp >= ? AND impact_score >= 8
                 ORDER BY impact_score DESC, timestamp DESC
                 LIMIT 10
             """, (seven_days_ago,))
@@ -187,13 +241,19 @@ def get_weekly_analysis():
                     "source": row["source_app"]
                 })
 
-            return {
+            result = {
                 "total_events": total_events,
                 "sentiment_counts": sentiment_counts,
                 "top_tickers": top_tickers,
                 "top_categories": top_categories,
                 "critical_events": critical_events
             }
+            
+            # Update cache
+            WEEKLY_CACHE["data"] = result
+            WEEKLY_CACHE["timestamp"] = current_time
+            
+            return result
     except Exception as e:
         print(f"Analysis API Error: {e}")
         return {"error": str(e)}
@@ -201,16 +261,11 @@ def get_weekly_analysis():
 @app.get("/api/analysis/daily")
 def get_daily_analysis():
     try:
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-            
-            # Get latest report
-            cursor.execute("""
-                SELECT * FROM daily_reports 
-                ORDER BY created_at DESC 
-                LIMIT 1
-            """)
+            # Get today's report
+            today_str = datetime.date.today().isoformat()
+            cursor.execute("SELECT * FROM daily_reports WHERE date = ?", (today_str,))
             row = cursor.fetchone()
             
             if row:
@@ -220,91 +275,93 @@ def get_daily_analysis():
                     "created_at": row["created_at"]
                 }
             else:
-                return {"message": "No daily analysis found."}
+                # Try to get the latest one if today's doesn't exist
+                cursor.execute("SELECT * FROM daily_reports ORDER BY date DESC LIMIT 1")
+                row = cursor.fetchone()
+                if row:
+                     return {
+                        "date": row["date"],
+                        "report": json.loads(row["report_json"]),
+                        "created_at": row["created_at"],
+                        "message": "Showing latest available report (not from today)."
+                    }
+                return {"message": "No reports found."}
     except Exception as e:
-        print(f"Daily Analysis API Error: {e}")
+        print(f"Daily Analysis Error: {e}")
         return {"error": str(e)}
 
 @app.post("/api/analysis/daily/generate")
-def generate_daily_analysis_trigger():
+def generate_daily_analysis_endpoint():
     try:
-        # 1. Check Market Hours (Allow only after 4:00 PM ET)
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        est_hour = (now_utc.hour - 5) % 24
-        
-        # Market Close is 16:00 ET (4 PM). Allow generation from 14:00 (2 PM) to 08:00 next day
-        # If it's between 09:00 and 14:00 ET, block it.
-        if 9 <= est_hour < 14:
-             return {
-                "status": "market_open", 
-                "message": f"Daily analysis is generated after 2:00 PM ET. Current ET hour: {est_hour}:00"
-            }
-
-        # Check if report for TODAY already exists and enforce 15-minute cooldown
-        current_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
+        # 1. Check if already exists for today
+        today_str = datetime.date.today().isoformat()
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT created_at FROM daily_reports WHERE date = ? ORDER BY created_at DESC LIMIT 1", (current_date_str,))
-            existing_report = cursor.fetchone()
-            
-            if existing_report:
-                last_generated = datetime.datetime.fromisoformat(existing_report['created_at'])
-                # Handle timezone if necessary, assuming created_at is naive or same timezone as now
-                # If created_at is ISO format from datetime.now().isoformat(), it might be naive local time
-                # Let's ensure we compare apples to apples. 
-                # In step 122, we saw created_at was isoformat().
-                
-                time_since_last = datetime.datetime.now() - last_generated
-                if time_since_last < datetime.timedelta(minutes=15):
-                     return {
-                        "status": "cooldown", 
-                        "message": f"Daily analysis already exists. Please wait {15 - int(time_since_last.total_seconds() // 60)} minutes before regenerating."
-                    }
+            cursor.execute("SELECT id FROM daily_reports WHERE date = ?", (today_str,))
+            if cursor.fetchone():
+                return {"status": "exists", "message": "Report for today already exists."}
 
-        # 2. Fetch last 24h logs
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            yesterday = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)).isoformat()
-            
+            # 2. Fetch last 24h logs
+            yesterday = (datetime.datetime.now() - datetime.timedelta(hours=24)).isoformat()
             cursor.execute("""
-                SELECT title, body, ticker_rsi, ticker_rvol, sentiment, impact_score, novelty_score, market_vix, market_sector_json, source_app
-                FROM logs 
-                WHERE timestamp >= ? AND status = 'SUCCESS' AND impact_score >= 5
+                SELECT title, body, source_app, sentiment, impact_score, related_ticker, context_json, ai_analysis_json
+                FROM news_events 
+                WHERE timestamp >= ?
                 ORDER BY impact_score DESC
-                LIMIT 50
             """, (yesterday,))
+            rows = cursor.fetchall()
             
-            logs = [dict(row) for row in cursor.fetchall()]
-            
-        if not logs:
-            return {"status": "skipped", "message": "Not enough high-impact events to analyze."}
+            logs = []
+            for r in rows:
+                # Extract some extra context if needed
+                context = {}
+                if r["context_json"]:
+                    try: context = json.loads(r["context_json"])
+                    except: pass
+                
+                micro = context.get("micro", {})
+                macro = context.get("macro", {})
+                
+                # Extract full analysis
+                ai_analysis = {}
+                if r["ai_analysis_json"]:
+                    try: ai_analysis = json.loads(r["ai_analysis_json"])
+                    except: pass
 
-        # 2. Generate Report
-        analysis_data, raw_text = generate_daily_report(logs)
+                logs.append({
+                    "title": r["title"],
+                    "body": r["body"],
+                    "source_app": r["source_app"],
+                    "sentiment": r["sentiment"],
+                    "impact_score": r["impact_score"],
+                    "novelty_score": context.get("novelty", 0),
+                    "ticker_rsi": micro.get("rsi"),
+                    "ticker_rvol": micro.get("rvol"),
+                    "market_vix": macro.get("market_vix"),
+                    "ai_analysis": ai_analysis
+                })
+
+        # 3. Generate Analysis
+        from analysis import generate_daily_report
+        report, raw = generate_daily_report(logs)
         
-        if not analysis_data:
-            return {"status": "error", "message": "Failed to generate analysis."}
-            
-        # 3. Save to DB
-        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
-        timestamp = datetime.datetime.now().isoformat()
-        
-        with sqlite3.connect(DB_FILE) as conn:
+        if not report:
+            return {"status": "error", "message": "Failed to generate report."}
+
+        # 4. Save to DB
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO daily_reports (date, report_json, created_at)
+                INSERT INTO daily_reports (date, report_json, created_at)
                 VALUES (?, ?, ?)
-            """, (current_date, json.dumps(analysis_data), timestamp))
+            """, (today_str, json.dumps(report), datetime.datetime.now().isoformat()))
             conn.commit()
-            
-        return {"status": "success", "date": current_date, "report": analysis_data}
-        
+
+        return {"status": "success", "date": today_str, "report": report}
+
     except Exception as e:
-        print(f"Generate Daily Analysis Error: {e}")
-        return {"error": str(e)}
+        print(f"Generate Daily Error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/signals")
 def get_active_signals():
@@ -312,18 +369,21 @@ def get_active_signals():
 
 @app.get("/api/export")
 def export_dataset():
-    """Generates a CSV file of the logs."""
+    """Generates a CSV file of the news events."""
     try:
-        with sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM logs")
+            cursor.execute("SELECT * FROM news_events")
+            # For CSV export, we might need column names which are not directly in Row object keys easily without description
+            # But cursor.description works fine.
             headers = [d[0] for d in cursor.description]
             rows = cursor.fetchall()
             
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(headers)
-            writer.writerows(rows)
+            # Convert Row objects to tuples/lists for writerows
+            writer.writerows([tuple(row) for row in rows])
             output.seek(0)
             
             return StreamingResponse(
@@ -337,6 +397,8 @@ def export_dataset():
 @app.get("/health")
 def health_check():
     return {"status": "online", "system": "Market Mind V2"}
+
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
