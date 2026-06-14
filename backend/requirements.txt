@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+gunicorn
+google-genai
+pandas
+numpy
+yfinance
+requests
+websocket-client
+python-dotenv
+python-multipart
+lightgbm
