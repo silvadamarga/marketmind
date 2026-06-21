@@ -16,7 +16,7 @@ GEMINI_ANALYSIS_PROMPT = """
     {{
       "headline": "<Concise, neutral context based on the event and your knowledge about the company/topic>",
       "category": "RATING" | "MACRO" | "CENTRAL_BANK" | "GEOPOLITICS" | "REGULATION" | "SENTIMENT" | "CRYPTO" | "REAL_ESTATE" | "OTHER",
-      "topic": "<The specific ongoing story this event belongs to, as a terse snake_case noun phrase, max 4 words. NOT the broad category — the concrete subject. e.g. 'us_iran_relations', 'fed_rate_path', 'ai_chip_export_curbs', 'nvidia_earnings'. CRITICAL: reuse the EXACT same string for every event in the same ongoing story so they cluster. Empty string if generic/one-off with no ongoing thread.>",
+      "topic": "<The specific ONGOING, MARKET-RELEVANT story this event belongs to, as a terse snake_case noun phrase, max 4 words. NOT the broad category — the concrete subject. e.g. 'us_iran_relations', 'fed_rate_path', 'ai_chip_export_curbs', 'nvidia_earnings'. CRITICAL: reuse the EXACT same string for every event in the same ongoing story so they cluster — prefer a broader existing-sounding label over a hyper-specific new one (use 'us_iran_relations' not 'iran_closes_strait_2026'). RETURN EMPTY STRING \"\" unless this is clearly part of a recurring market story: one-off accidents, human-interest, local/regional non-market news, sports, generic market color, or a singular event with no ongoing thread all get \"\".>",
       "sentiment_label": "BULLISH" | "BEARISH" | "NEUTRAL",
       "impact_score": 0-10 (0=No impact, 1+ Impacts the sector or region, 10=Markets Crashing Event),
       "novelty_score": 1-10 (1=Old news/Repetitive, 10=Breaking/Unprecedented),

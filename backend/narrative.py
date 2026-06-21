@@ -91,14 +91,20 @@ def _ensure(cur):
             pass  # column already exists
 
 
-def _rows_for(cur, column, value, since):
-    """Recent, factual (noise-excluded) events for one entity, newest first."""
-    cur.execute(
-        f"SELECT title, ai_analysis_json, category, impact_score, "
-        f"timestamp, source_app, embedding FROM news_events "
-        f"WHERE {column} = ? AND timestamp >= ? "
-        f"AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) "
-        f"ORDER BY timestamp DESC", (value, since))
+def _rows_for(cur, column, value, since, exclude_topics=None):
+    """Recent, factual (noise-excluded) events for one entity, newest first.
+    `exclude_topics` drops events already claimed by a qualifying fine topic — used
+    so a category catch-all card doesn't double-count events that have their own card."""
+    sql = (f"SELECT title, ai_analysis_json, category, impact_score, "
+           f"timestamp, source_app, embedding FROM news_events "
+           f"WHERE {column} = ? AND timestamp >= ? "
+           f"AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) ")
+    params = [value, since]
+    if exclude_topics:
+        sql += f"AND (topic IS NULL OR topic NOT IN ({','.join('?' * len(exclude_topics))})) "
+        params.extend(exclude_topics)
+    sql += "ORDER BY timestamp DESC"
+    cur.execute(sql, params)
     return cur.fetchall()
 
 
@@ -268,21 +274,36 @@ def build_narratives(synthesize=True):
             "AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) "
             "GROUP BY related_ticker HAVING n >= ?", (since, MIN_EVENTS))
         stocks = [r["e"] for r in cur.fetchall()]
-        # Topic narratives group on the fine `topic` Gemini emits, falling back to
-        # the coarse `category` for events that have none (old data, or one-offs).
-        # So fresh events cluster into specific stories while legacy/untopic'd events
-        # keep their broad category card until they age out of the window.
+        # Topic narratives, two passes so no story ever loses a card:
+        #  1. fine `topic`s that cleared the gate -> their own specific card
+        #  2. category catch-all -> every OTHER event (null topic, or a topic still
+        #     below the gate) rolled up by coarse category. This keeps a broad card
+        #     alive for the long tail while specific stories split off as they earn it.
+        cat_ph = ",".join("?" * len(TOPIC_CATEGORIES))
         cur.execute(
-            "SELECT COALESCE(topic, category) e, COUNT(*) n FROM news_events "
-            "WHERE timestamp >= ? AND category IN (%s) "
-            "GROUP BY COALESCE(topic, category) HAVING n >= ?" % ",".join("?" * len(TOPIC_CATEGORIES)),
+            "SELECT topic e, COUNT(*) n FROM news_events "
+            "WHERE timestamp >= ? AND topic IS NOT NULL AND category IN (%s) "
+            "GROUP BY topic HAVING n >= ?" % cat_ph,
             (since, *TOPIC_CATEGORIES, MIN_EVENTS))
-        topics = [r["e"] for r in cur.fetchall()]
+        fine_topics = [r["e"] for r in cur.fetchall()]
 
-        for etype, col, ents in (("stock", "related_ticker", stocks),
-                                 ("topic", "COALESCE(topic, category)", topics)):
+        catch_sql = ("SELECT category e, COUNT(*) n FROM news_events "
+                     "WHERE timestamp >= ? AND category IN (%s) " % cat_ph)
+        catch_params = [since, *TOPIC_CATEGORIES]
+        if fine_topics:
+            catch_sql += "AND (topic IS NULL OR topic NOT IN (%s)) " % ",".join("?" * len(fine_topics))
+            catch_params.extend(fine_topics)
+        catch_sql += "GROUP BY category HAVING n >= ?"
+        catch_params.append(MIN_EVENTS)
+        cur.execute(catch_sql, catch_params)
+        catch_cats = [r["e"] for r in cur.fetchall()]
+
+        for etype, col, ents, excl in (
+                ("stock", "related_ticker", stocks, None),
+                ("topic", "topic", fine_topics, None),
+                ("topic", "category", catch_cats, fine_topics or None)):
             for ent in ents:
-                rows = _rows_for(cur, col, ent, since)
+                rows = _rows_for(cur, col, ent, since, exclude_topics=excl)
                 if len(rows) < MIN_EVENTS:
                     continue
                 card = _card(etype, ent, rows)

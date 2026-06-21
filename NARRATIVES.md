@@ -22,13 +22,16 @@ about it. Three rules (`narrative.py` module docstring):
 Two kinds:
 
 - **stock** — grouped by `related_ticker` (one card per ticker).
-- **topic** — grouped by `COALESCE(topic, category)`. Gemini emits a fine
-  `topic` (terse snake_case, e.g. `us_iran_relations`) per event; topic narratives
-  group on it, falling back to the coarse 9-value `category` enum for events that
-  have none (legacy data, or one-offs). Fresh events cluster into specific stories
-  while untopic'd events keep a broad category card until they age out of the
-  window. `category` stays the load-bearing field for ML/posture/filters —
-  untouched by this split.
+- **topic** — built in two passes so no story ever loses a card:
+  1. Fine `topic`s (Gemini emits a terse snake_case label per event, e.g.
+     `us_iran_relations`) that clear the gate → their own specific card.
+  2. **Category catch-all** — every other event (null topic, or a topic still
+     below the gate) rolled up by the coarse 9-value `category` enum.
+
+  So a specific story splits off once it earns `MIN_EVENTS`, while the long tail
+  keeps a broad category card alive. `category` stays the load-bearing field for
+  ML/posture/filters — untouched by this split. (Gemini is told to return an empty
+  `topic` for one-off / non-market news so noise falls straight into the catch-all.)
 
 ## Pipeline
 

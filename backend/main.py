@@ -216,14 +216,16 @@ def _attach_narrative_impact(cursor, rows, items):
         emb = row["embedding"]
         if not emb:
             continue
-        # match the most specific entity: stock (ticker) first, else topic narrative
-        # keyed on the fine `topic`, falling back to the coarse `category`.
+        # match the most specific narrative: stock (ticker) first, then the fine
+        # `topic` card, then the coarse `category` catch-all (where sub-gate topics live).
         cen = None
         if row["related_ticker"]:
             cen = centroids.get(("stock", row["related_ticker"]))
-        topic_key = (row["topic"] if "topic" in row.keys() else None) or row["category"]
-        if cen is None and topic_key:
-            cen = centroids.get(("topic", topic_key))
+        topic = row["topic"] if "topic" in row.keys() else None
+        if cen is None and topic:
+            cen = centroids.get(("topic", topic))
+        if cen is None and row["category"]:
+            cen = centroids.get(("topic", row["category"]))
         if not cen:
             continue
         try:
