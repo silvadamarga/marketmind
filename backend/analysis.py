@@ -4,7 +4,8 @@ import re
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY
-from prompts import GEMINI_ANALYSIS_PROMPT, DAILY_REPORT_PROMPT
+from prompts import (GEMINI_ANALYSIS_PROMPT, DAILY_REPORT_PROMPT,
+                     NARRATIVE_SYNTHESIS_PROMPT, FORGE_INSPIRATION_PROMPT)
 
 # Stamped into every analysis for provenance. History:
 #   gemini 2.x (unstamped)            ... 2026-04-19
@@ -62,6 +63,49 @@ def get_gemini_analysis(title, body, source_app):
         print(f"❌ Analysis Error: {e}")
         return None, str(e)
 
+def generate_narrative_synthesis(entity, events_text):
+    """Grounded, direction-free 'story so far' for one entity. Returns the parsed
+    dict, or None if no API key / the call fails (caller falls back to the
+    deterministic card — degrade-not-vanish)."""
+    if client is None:
+        return None
+    prompt = NARRATIVE_SYNTHESIS_PROMPT.format(entity=entity, events_text=events_text)
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
+        um = response.usage_metadata
+        # thinking is on (REPORT_CONFIG) — thoughts tokens are billed; log to monitor cost
+        print(f"🧠 synth {entity}: in {um.prompt_token_count} out {um.candidates_token_count} "
+              f"think {getattr(um, 'thoughts_token_count', None)}")
+        return json.loads(clean_json_string(response.text))
+    except Exception as e:
+        print(f"⚠️ Narrative synthesis failed for {entity}: {e}")
+        return None
+
+
+def generate_forge_inspiration(brief_text):
+    """Opinionated, trader-only narration of the forge's fundamental ranking.
+    Long-form generation (thinking on, REPORT_CONFIG). Returns the parsed dict,
+    or None if no API key / the call fails (caller degrades gracefully)."""
+    if client is None:
+        return None
+    prompt = FORGE_INSPIRATION_PROMPT.format(brief_text=brief_text)
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
+            um = response.usage_metadata
+            print(f"💡 inspiration: in {um.prompt_token_count} out {um.candidates_token_count} "
+                  f"think {getattr(um, 'thoughts_token_count', None)}")
+            return json.loads(clean_json_string(response.text))
+        except Exception as e:
+            print(f"⚠️ Forge inspiration failed (attempt {attempt+1}/{retries}): {e}")
+            if attempt == retries - 1:
+                return None
+            time.sleep(1)
+
+
 def generate_daily_report(logs):
     """
     Generates a daily market analysis report using Gemini based on the provided logs.
@@ -76,7 +120,8 @@ def generate_daily_report(logs):
         event_str = f"Event {i+1}:\n"
         event_str += f"Title: {log.get('title', 'N/A')}\n"
         event_str += f"Summary: {log.get('body', 'N/A')}\n"
-        event_str += f"Sentiment: {log.get('sentiment', 'N/A')}\n"
+        # Sentiment deliberately NOT fed to the recap — it must not anchor on a
+        # direction (the public recap is factual, no buy/sell, no forecast).
 
         # Add AI Analysis Context
         ai_data = log.get('ai_analysis', {})

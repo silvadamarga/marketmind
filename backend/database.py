@@ -125,6 +125,9 @@ def init_db():
             try:
                 c.execute("ALTER TABLE news_events ADD COLUMN ml_score_json TEXT")
             except sqlite3.OperationalError: pass
+            try:
+                c.execute("ALTER TABLE news_events ADD COLUMN topic TEXT")
+            except sqlite3.OperationalError: pass
 
             # Indexes
             c.execute("CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(event_category)")
@@ -132,6 +135,7 @@ def init_db():
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_events_ticker ON news_events(related_ticker)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_ticker_time ON news_events(related_ticker, timestamp DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_category_time ON news_events(category, timestamp DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_topic_time ON news_events(topic, timestamp DESC)")
 
             # 4. Daily Reports
             c.execute('''CREATE TABLE IF NOT EXISTS daily_reports (
@@ -174,6 +178,9 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
         thesis = analysis.get("key_takeaway") or analysis.get("thesis")
         category = analysis.get("category") or analysis.get("event_category")
         confidence = analysis.get("confidence") or analysis.get("ai_confidence")
+        # normalize the fine topic key so near-identical strings cluster (lower/trim);
+        # empty/whitespace → NULL so the narrative grouping falls back to category.
+        topic = (analysis.get("topic") or "").strip().lower().replace(" ", "_") or None
 
         context_data = json_safe({
             "macro": macro_context or {},
@@ -189,8 +196,8 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute('''INSERT INTO news_events
-                         (timestamp, source_app, title, body, sentiment, impact_score, related_ticker, category, ai_analysis_json, embedding, context_json, ml_score_json)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         (timestamp, source_app, title, body, sentiment, impact_score, related_ticker, category, topic, ai_analysis_json, embedding, context_json, ml_score_json)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                       (timestamp,
                        data_pack.get("source"),
                        data_pack.get("title"),
@@ -199,6 +206,7 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
                        analysis.get("impact_score", 0),
                        primary_ticker,
                        category,
+                       topic,
                        json.dumps(analysis),
                        embedding,
                        json.dumps(context_data),

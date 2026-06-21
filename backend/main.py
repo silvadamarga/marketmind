@@ -1,13 +1,14 @@
 import threading
+import os
 import sqlite3
-import json 
+import json
 import uvicorn
 import io
 import csv
 import datetime
 import time
 import math
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
@@ -23,11 +24,16 @@ from database import init_db, DB_FILE, get_db_connection, json_safe
 async def lifespan(app: FastAPI):
     print("🚀 Starting Market Mind Engine...")
     init_db()
-    # Start background threads for processing and monitoring
-    threading.Thread(target=bot_logic.process_news_queue, daemon=True).start()
-    threading.Thread(target=ingestor.start_listening, daemon=True).start()
-    threading.Thread(target=monitor.vwap_monitor_loop, daemon=True).start()
-    threading.Thread(target=monitor.macro_monitor_loop, daemon=True).start()
+    # MM_NO_WORKERS: serve the API read-only (local UI testing) — skip the live
+    # pipeline so no Gemini calls, Discord posts, or Pushbullet ingestion fire.
+    if os.getenv("MM_NO_WORKERS"):
+        print("⚙️  MM_NO_WORKERS set — API only, background workers disabled.")
+    else:
+        # Start background threads for processing and monitoring
+        threading.Thread(target=bot_logic.process_news_queue, daemon=True).start()
+        threading.Thread(target=ingestor.start_listening, daemon=True).start()
+        threading.Thread(target=monitor.vwap_monitor_loop, daemon=True).start()
+        threading.Thread(target=monitor.macro_monitor_loop, daemon=True).start()
     yield
     print("🛑 Shutting down engine...")
 
@@ -41,6 +47,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Direction scoring is retired from the PUBLIC feed: research proved news has no
+# tradeable direction/timing edge (coin-flip every horizon), so broadcasting a
+# direction call would imply an edge that doesn't exist. These keys are stripped
+# from the served analysis; sentiment/ml_score are still COMPUTED for internal use
+# (private Discord, market_posture shadow) — just not surfaced publicly.
+# Categories never surfaced on the PUBLIC feed: SENTIMENT (mood-tags) and RATING
+# (analyst up/downgrades) are direction noise, not factual events. Still stored
+# and computed; just not shown publicly. The feed is factual-events-only.
+PUBLIC_FEED_EXCLUDE_CATEGORIES = ("SENTIMENT", "RATING")
+
+DIRECTION_KEYS = {
+    "sentiment", "action", "verdict", "recommendation", "trading_advice",
+    "trade_idea", "direction", "bias", "stance", "conviction",
+    "price_target", "target", "target_price", "stop_loss", "entry",
+}
+
+
+def _strip_direction(d):
+    """Drop direction-bearing keys from a Gemini analysis dict (public surface)."""
+    if not isinstance(d, dict):
+        return d
+    return {k: v for k, v in d.items() if k.lower() not in DIRECTION_KEYS}
+
 
 # --- HELPER FUNCTIONS ---
 def format_news_event(row):
@@ -96,7 +126,8 @@ def format_news_event(row):
         "date": row_dict.get("timestamp"),
         "relevanceScore": display_score,
         "impact": impact_label,
-        "sentiment": row_dict.get("sentiment") or "NEUTRAL",
+        # sentiment / ml_score retired from the public payload (direction is dead);
+        # priority (relevanceScore) + novelty are attention signals, not direction.
         "summary": thesis,
         "thesis": thesis,
         "tags": tags,
@@ -110,8 +141,7 @@ def format_news_event(row):
             "novelty": novelty
         },
         "novelty_score": novelty,
-        "ml_score": ml_score,
-        "full_analysis": analysis_details
+        "full_analysis": _strip_direction(analysis_details)
     }
 
 # --- API ENDPOINTS ---
@@ -126,14 +156,19 @@ def get_intelligence_feed(before_id: int = None, before_time: str = None, limit:
             # Base Query Construction
             query_parts = ["SELECT * FROM news_events"]
             conditions = []
-            
+
+            # 0. Drop direction-noise categories from the public feed (always)
+            _ph = ",".join("?" * len(PUBLIC_FEED_EXCLUDE_CATEGORIES))
+            conditions.append(f"(category IS NULL OR category NOT IN ({_ph}))")
+            params.extend(PUBLIC_FEED_EXCLUDE_CATEGORIES)
+
             # 1. Search Filter (Server-Side)
             if search_term and search_term.strip():
                 term = f"%{search_term.strip()}%"
                 conditions.append("""
-                    (title LIKE ? OR body LIKE ? OR related_ticker LIKE ? OR category LIKE ?)
+                    (title LIKE ? OR body LIKE ? OR related_ticker LIKE ? OR category LIKE ? OR topic LIKE ?)
                 """)
-                params.extend([term, term, term, term])
+                params.extend([term, term, term, term, term])
 
             # 2. Pagination (Cursor-Based)
             if before_time and before_id:
@@ -155,10 +190,48 @@ def get_intelligence_feed(before_id: int = None, before_time: str = None, limit:
             
             cursor.execute(final_query, params)
             rows = cursor.fetchall()
-            return [format_news_event(row) for row in rows]
+            items = [format_news_event(row) for row in rows]
+            _attach_narrative_impact(cursor, rows, items)
+            return items
     except Exception as e:
         print(f"API Feed Error: {e}")
         return []
+
+
+def _attach_narrative_impact(cursor, rows, items):
+    """Tag each fresh headline with how much it could move its entity's narrative
+    (embedding distance from the story centroid). Best-effort: silently skips items
+    with no embedding or no built narrative."""
+    import narrative
+    try:
+        centroids = {(r["entity_type"], r["entity"]): r["centroid"]
+                     for r in cursor.execute(
+                         "SELECT entity_type, entity, centroid FROM narratives "
+                         "WHERE centroid IS NOT NULL")}
+    except Exception:
+        return  # narratives table not built yet
+    if not centroids:
+        return
+    for row, item in zip(rows, items):
+        emb = row["embedding"]
+        if not emb:
+            continue
+        # match the most specific entity: stock (ticker) first, else topic narrative
+        # keyed on the fine `topic`, falling back to the coarse `category`.
+        cen = None
+        if row["related_ticker"]:
+            cen = centroids.get(("stock", row["related_ticker"]))
+        topic_key = (row["topic"] if "topic" in row.keys() else None) or row["category"]
+        if cen is None and topic_key:
+            cen = centroids.get(("topic", topic_key))
+        if not cen:
+            continue
+        try:
+            imp = narrative.headline_impact(json.loads(emb), json.loads(cen))
+        except (ValueError, TypeError):
+            imp = None
+        if imp:
+            item["narrative_impact"] = imp
 
 @app.get("/api/feed/{item_id}")
 def get_intelligence_item(item_id: int):
@@ -280,6 +353,17 @@ def generate_daily_analysis_endpoint():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/api/inspiration")
+def get_forge_inspiration(refresh: bool = Query(False)):
+    """Opinionated narration of the forge's fundamental ranking — lazy-built +
+    cached by snapshot date. Open, like the rest of the app."""
+    try:
+        import inspiration
+        return json_safe(inspiration.get_inspiration(refresh=refresh))
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/signals")
 def get_active_signals():
     return json_safe(list(monitor.LATEST_VWAP_DATA.values()))
@@ -294,6 +378,50 @@ def get_market_posture():
         return json_safe(market_posture.get_posture(vix=vix or None))
     except Exception as e:
         return {"label": "UNKNOWN", "note": f"posture unavailable: {e}"}
+
+@app.get("/api/regime")
+def get_regime_state():
+    """Market-regime state (VIX level/state, term structure, trend, deployment
+    posture) — the forge's P1 substrate, the one real signal. Sizing/vol, never a
+    direction call. Degrades to UNKNOWN if the forge snapshot is missing/stale."""
+    try:
+        import regime
+        return json_safe(regime.get_regime())
+    except Exception as e:
+        return {"status": "UNKNOWN", "note": f"regime unavailable: {e}"}
+
+@app.get("/api/narratives")
+def list_narratives(limit: int = 50):
+    """Per-entity 'story so far' cards (P8) — factual digests, no direction.
+    Supersede: one current card per stock/topic, rebuilt as news arrives."""
+    try:
+        import narrative
+        return json_safe(narrative.get_narratives(limit))
+    except Exception as e:
+        print(f"Narratives error: {e}")
+        return []
+
+@app.get("/api/narratives/{entity_type}/{entity}")
+def get_narrative_detail(entity_type: str, entity: str):
+    """Full narrative for one entity (all developments + LLM story arc) — loaded
+    when a card is expanded."""
+    try:
+        import narrative
+        card = narrative.get_narrative(entity_type, entity)
+        return json_safe(card) if card else {}
+    except Exception as e:
+        print(f"Narrative detail error: {e}")
+        return {}
+
+@app.post("/api/narratives/build")
+def build_narratives_endpoint():
+    """(Re)build the narrative cards from recent news. Cheap + deterministic
+    (no LLM) — safe to call on a schedule or on demand."""
+    try:
+        import narrative
+        return json_safe(narrative.build_narratives())
+    except Exception as e:
+        return {"built": 0, "error": str(e)}
 
 @app.get("/api/export")
 def export_dataset():

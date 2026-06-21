@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Zap, TrendingUp, Clock, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, BookOpen, Sparkles, Layers } from 'lucide-react';
 
 const formatTimeAgo = (dateString) => {
     const date = new Date(dateString);
@@ -15,17 +15,6 @@ const formatTimeAgo = (dateString) => {
     return `${days}d ago`;
 };
 
-const AIBadge = ({ icon: Icon, label, value, colorClass }) => {
-    return (
-        <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border bg-opacity-10 ${colorClass}`}>
-            {Icon && <Icon size={14} />}
-            <div className="flex flex-col leading-none">
-                <span className="text-[9px] font-bold opacity-70 uppercase tracking-wider">{label}</span>
-                <span className="text-xs font-mono font-bold">{value}</span>
-            </div>
-        </div>
-    );
-};
 
 const FeedCard = (props) => {
     const { update } = props;
@@ -38,14 +27,47 @@ const FeedCard = (props) => {
     const isNoise = (update.relevanceScore || 0) < 3;
     const { confidence } = update.ml_context || {};
 
-    // Impact Styling
-    const impactStyles = {
-        CRITICAL: "bg-gradient-to-br from-red-900/20 to-[#131b2e] border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)]",
-        HIGH: "bg-gradient-to-br from-amber-900/10 to-[#131b2e] border-amber-500/30",
-        MEDIUM: "bg-[#0f1422] border-slate-800/30 opacity-90 hover:opacity-100",
-        LOW: "bg-[#0f1422] border-slate-800/30 opacity-80 hover:opacity-100"
+    // Similar headlines stacked under this one (grouped in Feed.jsx).
+    const siblings = props.siblings || [];
+    const [stackOpen, setStackOpen] = useState(false);
+
+    // Embedded narrative: if this item's ticker/category has a "story so far", surface
+    // it inline. tags are [related_ticker, category] — ticker first = most specific match.
+    const { narrativeIndex = {}, onOpenNarratives } = props;
+    const narrative = (update.tags || []).map(t => narrativeIndex[t]).find(Boolean) || null;
+    const [storyOpen, setStoryOpen] = useState(false);
+    const [storyData, setStoryData] = useState(null);
+    const [storyLoading, setStoryLoading] = useState(false);
+
+    const toggleStory = async (e) => {
+        e.stopPropagation();
+        const next = !storyOpen;
+        setStoryOpen(next);
+        if (next && !storyData && narrative) {
+            setStoryLoading(true);
+            try {
+                const r = await fetch(`/api/narratives/${narrative.entity_type}/${encodeURIComponent(narrative.entity)}`);
+                if (r.ok) setStoryData(await r.json());
+            } catch (err) {
+                console.error("Narrative fetch failed", err);
+            } finally {
+                setStoryLoading(false);
+            }
+        }
     };
-    const cardStyle = impactStyles[update.impact] || impactStyles.LOW;
+
+    // Impact styling: a colored LEFT accent bar = impact tier (scannable on mobile),
+    // with a faint surface tint for the loud tiers. The rest of the card stays calm.
+    const impactAccent = {
+        CRITICAL: "border-l-red-500 bg-red-950/10",
+        HIGH: "border-l-amber-500 bg-amber-950/[0.07]",
+        MEDIUM: "border-l-slate-600",
+        LOW: "border-l-slate-700",
+    };
+    const cardStyle = impactAccent[update.impact] || impactAccent.LOW;
+    const priorityColor = update.relevanceScore >= 8 ? 'bg-red-500 text-red-300'
+        : update.relevanceScore >= 7 ? 'bg-amber-500 text-amber-300'
+        : 'bg-slate-600 text-slate-400';
 
     const handleToggle = (e) => {
         // If onClick prop is provided (for navigation), use it
@@ -100,20 +122,6 @@ const FeedCard = (props) => {
                     </div>
                 )}
 
-                {/* Verdict Badge */}
-                {content.verdict && (
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-500 uppercase">Verdict:</span>
-                        <span className={`text-xs px-2 py-0.5 rounded font-bold ${
-                            content.verdict === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' :
-                            content.verdict === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
-                            'bg-slate-700 text-slate-300'
-                        }`}>
-                            {content.verdict}
-                        </span>
-                    </div>
-                )}
-
                 {/* Drivers */}
                 {content.key_drivers && content.key_drivers.length > 0 && (
                     <div>
@@ -138,145 +146,97 @@ const FeedCard = (props) => {
     };
 
     return (
-        <div 
+        <div
             onClick={handleToggle}
-            className={`border rounded-lg transition-all duration-300 hover:border-slate-600 cursor-pointer ${cardStyle} ${isNoise ? 'opacity-70 grayscale' : ''} ${isExpanded ? 'p-5' : 'p-3'}`}
+            className={`border border-slate-800/50 border-l-[3px] rounded-md transition-colors hover:bg-slate-800/20 cursor-pointer ${cardStyle} ${isNoise ? 'opacity-50' : ''} px-3.5 py-2.5`}
         >
-            <div className="flex justify-between items-start gap-3">
-                <div className="flex-1 min-w-0">
-                    {/* Meta Row */}
-                    <div className="flex items-center space-x-2 mb-1.5 opacity-75 text-[10px]">
-                        <span className={`font-bold tracking-wider uppercase ${isHighImpact ? 'text-blue-400' : 'text-slate-500'}`}>
-                            {update.headline || update.source || "UNKNOWN"}
-                        </span>
-                        <span className="text-slate-600">•</span>
-                        <span className="text-slate-500">{formatTimeAgo(update.date)}</span>
-                        {/* Show small sentiment dot in compact mode if not expanded */}
-                        {!isExpanded && update.sentiment && update.sentiment !== 'NEUTRAL' && (
-                             <span className={`w-2 h-2 rounded-full ${update.sentiment === 'BULLISH' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+            {/* GLANCE: headline + search (top-right) */}
+            <div className="flex items-start gap-3">
+                <h3 className="flex-1 min-w-0 leading-snug text-[15px] text-slate-100">
+                    {update.title || update.headline}
+                </h3>
+                <button
+                    onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/search?q=${encodeURIComponent(update.title || update.headline)}`, '_blank'); }}
+                    className="shrink-0 text-slate-500 hover:text-slate-200 transition-colors pt-0.5"
+                    title="Search"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                </button>
+            </div>
+
+            {/* Footer: story / similar (left) · bull-bear dot + time (bottom-right) */}
+                <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-x-4">
+                        {narrative && (
+                            <button onClick={toggleStory}
+                                className="flex items-center gap-1 text-[11px] font-medium text-indigo-300/90 hover:text-indigo-200 transition-colors">
+                                <BookOpen size={12} /> Story · {narrative.label}
+                                {narrative.has_synthesis && <Sparkles size={10} className="text-indigo-400" />}
+                                {storyOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
                         )}
+                        {siblings.length > 0 && (
+                            <button onClick={() => setStackOpen(!stackOpen)}
+                                className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors">
+                                <Layers size={12} /> +{siblings.length} similar
+                                {stackOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
+                        )}
+                        <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[11px] text-slate-500">
+                            {narrative && narrative.direction && (
+                                <span title={`story ${narrative.direction}`}
+                                    className={`w-2 h-2 rounded-full ${narrative.direction === 'bull' ? 'bg-emerald-500'
+                                        : narrative.direction === 'bear' ? 'bg-red-500' : 'bg-slate-500'}`} />
+                            )}
+                            {formatTimeAgo(update.date)}
+                        </span>
                     </div>
 
-                    {/* Headline */}
-                    <h3 className={`leading-snug text-lg text-slate-200'`}>
-                        {update.title || update.headline}
-                    </h3>
-
-                    {/* Expanded Content */}
-                    {isExpanded && (
-                        <div className="mt-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
-
-
-                            {/* Gemini Thesis */}
-                            {update.thesis && (
-                                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
-                                    <div className="flex items-center gap-2 mb-1 text-xs font-bold text-indigo-400 uppercase tracking-wider">
-                                        <Zap size={12} /> Thesis
-                                    </div>
-                                    <p className="text-slate-300 text-sm italic">
-                                        "{update.thesis}"
-                                    </p>
-                                </div>
-                            )}
-
-                            {/* Tags Row */}
-                            <div className="flex flex-wrap items-center gap-2 mt-2 justify-between">
-                                <div className="flex flex-wrap items-center gap-2">
-                                    {/* Sentiment */}
-                                    {update.sentiment && update.sentiment !== 'NEUTRAL' && (
-                                        <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${update.sentiment === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-                                                'bg-red-500/10 border-red-500/30 text-red-400'
-                                            }`}>
-                                            {update.sentiment}
-                                        </span>
-                                    )}
-                                    
-                                    {/* Action */}
-                                    {update.action && update.action !== 'WATCH' && (
-                                         <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
-                                            {update.action}
-                                         </span>
-                                    )}
-
-                                    {/* Tags (Tickers/Categories) */}
-                                    {update.tags && update.tags.map(tag => (
-                                        <span key={tag} className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 font-medium">
-                                            {tag}
-                                        </span>
-                                    ))}
-
-                                    {/* Timeframe */}
-                                    {update.timeframe && (
-                                         <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 font-medium">
-                                            {update.timeframe}
-                                         </span>
-                                    )}
-                                </div>
-
-                                {/* Google Search Button */}
-                                {update.tags && update.tags.length > 0 && (
-                                    <button 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            window.open(`https://www.google.com/search?q=${encodeURIComponent(update.title || update.headline)}`, '_blank');
-                                        }}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold transition-colors border border-slate-600"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                                        Google Search
-                                    </button>
+                    {storyOpen && narrative && storyData && (() => {
+                        const arc = storyData.synthesis && storyData.synthesis.arc;
+                        const devs = storyData.developments || [];
+                        return (
+                            <div className="mt-2 bg-[#0c1120] border border-indigo-500/20 rounded-lg p-3 space-y-2">
+                                {arc && <p className="text-xs text-slate-300 leading-relaxed">{arc}</p>}
+                                {devs.length > 0 && (
+                                    <ul className="list-disc list-inside text-[11px] text-slate-400 space-y-0.5">
+                                        {devs.slice(0, 3).map((d, i) => <li key={i}>{d.headline}</li>)}
+                                    </ul>
                                 )}
                             </div>
-                        </div>
-                    )}
-                </div>
+                        );
+                    })()}
 
-                {/* Right Side: AI Scores & Expand Icon */}
-                <div className="flex flex-col gap-2 shrink-0 items-end">
-                    {/* Impact Visual */}
-                    <div className="flex flex-col items-end">
-                        {isExpanded && <span className="text-[9px] font-bold text-slate-500 uppercase mb-0.5">Impact</span>}
-                        <div className="flex space-x-0.5">
-                            {[...Array(5)].map((_, i) => (
-                                <div key={i} className={`rounded-sm ${isExpanded ? 'w-1.5 h-4' : 'w-1 h-2'} ${i < (update.relevanceScore / 2) ? 
-                                    (update.relevanceScore >= 8 ? 'bg-red-500' : update.relevanceScore >= 7 ? 'bg-amber-500' : 'bg-blue-500') 
-                                    : 'bg-slate-800'}`} 
-                                />
+                    {stackOpen && siblings.length > 0 && (
+                        <div className="mt-1.5 pl-3 border-l border-slate-800 space-y-1.5">
+                            {siblings.map(s => (
+                                <div key={s.id} className="flex items-baseline justify-between gap-2 text-xs">
+                                    <span className="text-slate-400 line-clamp-1">{s.title || s.headline}</span>
+                                    <span className="text-slate-600 shrink-0 whitespace-nowrap">{formatTimeAgo(s.date)}</span>
+                                </div>
                             ))}
                         </div>
-                    </div>
-
-                    {/* Confidence & Novelty (Only in expanded) */}
-                    {isExpanded && (
-                        <div className="flex flex-col items-end mt-1 space-y-2">
-                            {/* Novelty Visual */}
-                            <div className="flex flex-col items-end">
-                                <span className="text-[9px] font-bold text-slate-500 uppercase mb-0.5">Novelty</span>
-                                <div className="flex space-x-0.5">
-                                    {[...Array(5)].map((_, i) => (
-                                        <div key={i} className={`rounded-sm w-1.5 h-4 ${i < ((update.novelty_score || 0) / 2) ? 
-                                            'bg-purple-500' : 'bg-slate-800'}`} 
-                                        />
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Confidence */}
-                            <div className="flex flex-col items-end">
-                                <span className="text-[9px] font-bold text-slate-500 uppercase mb-0.5">Conf</span>
-                                <span className="text-xs font-mono font-bold text-blue-400">{confidence || "-"}</span>
-                            </div>
-                        </div>
-                    )}
-                    
-                    {/* Expand/Collapse Indicator */}
-                    {!isHighImpact && (
-                        <div className="mt-1 text-slate-600">
-                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </div>
                     )}
                 </div>
-            </div>
+
+            {/* DETAILS on tap — source, thesis, scores, search */}
+            {isExpanded && (
+                <div className="mt-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+                    {(update.headline || update.source) && (
+                        <p className="text-[11px] text-slate-500">via {update.headline || update.source}</p>
+                    )}
+                    {update.thesis && (
+                        <p className="text-slate-300 text-sm italic border-l-2 border-indigo-500/50 pl-3">"{update.thesis}"</p>
+                    )}
+                    <div className="flex items-center gap-3">
+                        <span className="text-[11px] text-slate-500 flex items-center gap-3">
+                            <span>P{update.relevanceScore ?? '-'}</span>
+                            <span className="text-purple-400/80">N{update.novelty_score ?? '-'}</span>
+                            {confidence ? <span className="text-blue-400/80">C{confidence}</span> : null}
+                        </span>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

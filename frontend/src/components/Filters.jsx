@@ -14,8 +14,6 @@ const FilterGroup = ({ label, children }) => (
 export default function Filters({
     rightOpen,
     resetFilters,
-    selectedSentiment,
-    setSelectedSentiment,
     minRelevance,
     setMinRelevance,
     minConfidence,
@@ -51,32 +49,11 @@ export default function Filters({
 
             <div className={`p-6 ${mobile ? 'pt-6' : 'pt-0'} flex-1 flex flex-col space-y-6 overflow-y-auto whitespace-nowrap overflow-hidden`}>
 
-                <FilterGroup label="Sentiment">
-                    <div className="grid grid-cols-3 gap-2">
-                        {[
-                            { id: 'BULLISH', label: 'Bull', color: 'text-emerald-400 border-emerald-500/50 bg-emerald-500/10' },
-                            { id: 'NEUTRAL', label: 'Neut', color: 'text-slate-400 border-slate-600 bg-slate-700/30' },
-                            { id: 'BEARISH', label: 'Bear', color: 'text-red-400 border-red-500/50 bg-red-500/10' }
-                        ].map(opt => (
-                            <button
-                                key={opt.id}
-                                onClick={() => setSelectedSentiment(selectedSentiment === opt.id ? 'ALL' : opt.id)}
-                                className={`text-xs py-2 rounded border transition-all ${selectedSentiment === opt.id
-                                        ? `${opt.color} font-bold ring-1 ring-inset`
-                                        : 'border-slate-800 bg-slate-900 text-slate-500 hover:border-slate-700'
-                                    }`}
-                            >
-                                {opt.label}
-                            </button>
-                        ))}
-                    </div>
-                </FilterGroup>
-
                 <FilterGroup label="Quality Thresholds">
                     <div className="space-y-4">
                         <div>
                             <div className="flex justify-between items-center mb-2">
-                                <label className="text-xs font-medium text-slate-400">Impact Score</label>
+                                <label className="text-xs font-medium text-slate-400">Priority</label>
                                 <span className="text-xs font-mono text-indigo-400">≥ {minRelevance}/10</span>
                             </div>
                             <input type="range" min="0" max="10" value={minRelevance} onChange={(e) => setMinRelevance(Number(e.target.value))} className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500" />

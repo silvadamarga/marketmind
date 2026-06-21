@@ -1,16 +1,77 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Zap, Filter, CheckCircle2 } from 'lucide-react';
 import FeedCard from './FeedCard';
 
-export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan, scanning, filteredUpdates, signals, loadMore, hasMore, loadingMore }) {
+// Stack near-duplicate headlines (same story from many sources / reworded repeats)
+// so the glance feed shows one row per story. Greedy single pass over the
+// newest-first list: an item joins the first group whose head it's similar enough
+// to (significant-word Jaccard) and recent enough to; else it starts a group.
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'to', 'of', 'in', 'on', 'at',
+    'by', 'with', 'from', 'as', 'is', 'are', 'be', 'its', 'it', 'this', 'that', 'after',
+    'over', 'amid', 'says', 'said', 'new', 'will', 'has', 'have', 'out', 'into', 'than', 'but']);
+// significant words, simple-stemmed (drop trailing 's') so beat/beats, cut/cuts match
+const sigWords = (s) => new Set((s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/).filter(w => w.length > 3 && !STOP.has(w))
+    .map(w => w.endsWith('s') ? w.slice(0, -1) : w));
+// Cluster on Gemini's normalized analysis (consistent across sources) rather than
+// raw source text: its concise headline + ml_tags (concept labels). Falls back to
+// the raw content when no analysis exists.
+const clusterText = (it) => {
+    const fa = it.full_analysis || {};
+    const tags = (fa.ml_tags || []).join(' ').replace(/_/g, ' ');
+    return `${fa.headline || ''} ${tags}`.trim() || it.title || it.headline || '';
+};
+const overlap = (a, b) => {
+    let n = 0;
+    for (const w of a) if (b.has(w)) n++;
+    return n;
+};
+const groupSimilar = (items) => {
+    const groups = [];
+    for (const it of items) {
+        const w = sigWords(clusterText(it));
+        let placed = false;
+        for (const g of groups) {
+            const inter = overlap(w, g._w);
+            const uni = w.size + g._w.size - inter;
+            // same story = several shared key words and decent overlap, within 2 days
+            const recent = Math.abs(new Date(it.date) - new Date(g.primary.date)) < 2 * 86400000;
+            if (recent && inter >= 2 && uni > 0 && inter / uni >= 0.34) {
+                g.others.push(it);
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) groups.push({ primary: it, others: [], _w: w });
+    }
+    return groups;
+};
+
+export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan, scanning, filteredUpdates, signals, loadMore, hasMore, loadingMore, setActiveTab }) {
+    // Narratives are embedded inline on the news cards (no separate strip): index
+    // the light cards by entity so a FeedCard can find its story by ticker/category tag.
+    const [narrativeIndex, setNarrativeIndex] = useState({});
+    useEffect(() => {
+        let alive = true;
+        fetch('/api/narratives')
+            .then(r => r.ok ? r.json() : [])
+            .then(cards => {
+                if (!alive) return;
+                const idx = {};
+                for (const c of cards) idx[c.entity] = c;
+                setNarrativeIndex(idx);
+            })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, []);
     return (
         <div className="flex-1 overflow-hidden flex min-w-0 relative">
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent min-w-0">
                 {activeTab === 'feed' && (
-                    <div className="max-w-5xl mx-auto space-y-4">
+                    <div className="max-w-5xl mx-auto space-y-2.5 sm:space-y-3">
 
                         {/* Search Bar */}
-                        <div className="flex items-center space-x-4 mb-6">
+                        <div className="flex items-center space-x-3 mb-4 sm:mb-6">
                             <div className="relative flex-1">
                                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                                 <input
@@ -47,10 +108,13 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan,
                                 )}
                             </div>
                         ) : (
-                            filteredUpdates.map((update) => (
-                                <FeedCard 
-                                    key={update.id} 
-                                    update={update} 
+                            groupSimilar(filteredUpdates).map((g) => (
+                                <FeedCard
+                                    key={g.primary.id}
+                                    update={g.primary}
+                                    siblings={g.others}
+                                    narrativeIndex={narrativeIndex}
+                                    onOpenNarratives={() => setActiveTab && setActiveTab('narratives')}
                                 />
                             ))
                         )}

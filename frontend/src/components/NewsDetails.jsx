@@ -44,9 +44,6 @@ export default function NewsDetails({ itemId, onBack }) {
     );
   }
 
-  const isBullish = item.sentiment === "BULLISH";
-  const isBearish = item.sentiment === "BEARISH";
-  const sentimentColor = isBullish ? "text-green-400" : isBearish ? "text-red-400" : "text-slate-400";
   const impactColor = item.impact === "CRITICAL" ? "text-purple-400" : item.impact === "HIGH" ? "text-red-400" : "text-blue-400";
 
   return (
@@ -84,16 +81,9 @@ export default function NewsDetails({ itemId, onBack }) {
             <h1 className="text-3xl font-bold text-white leading-tight mb-4">{item.headline}</h1>
             
             {/* Quick Stats Bar */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-[#0f1422] p-4 rounded-lg border border-slate-800/50">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-[#0f1422] p-4 rounded-lg border border-slate-800/50">
                 <div>
-                    <div className="text-xs text-slate-500 mb-1">SENTIMENT</div>
-                    <div className={`font-bold flex items-center ${sentimentColor}`}>
-                        {isBullish ? <TrendingUp size={16} className="mr-1"/> : isBearish ? <TrendingDown size={16} className="mr-1"/> : <Activity size={16} className="mr-1"/>}
-                        {item.sentiment}
-                    </div>
-                </div>
-                <div>
-                    <div className="text-xs text-slate-500 mb-1">RELEVANCE</div>
+                    <div className="text-xs text-slate-500 mb-1">PRIORITY</div>
                     <div className="font-bold text-white">{item.relevanceScore}/10</div>
                 </div>
                 <div>
@@ -132,13 +122,6 @@ export default function NewsDetails({ itemId, onBack }) {
                     </div>
                 </div>
 
-                {/* Trading Advice (if available) */}
-                {item.full_analysis?.trading_advice && (
-                    <div className="bg-blue-900/20 p-5 rounded-lg border border-blue-800/50">
-                        <h4 className="text-blue-400 font-bold mb-2">Trading Action</h4>
-                        <p className="text-blue-100">{item.full_analysis.trading_advice}</p>
-                    </div>
-                )}
             </div>
 
             {/* Right Column: Market Context */}

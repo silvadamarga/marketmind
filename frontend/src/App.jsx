@@ -7,7 +7,9 @@ import Filters from './components/Filters';
 import UniverseGuide from './components/UniverseGuide';
 import WeeklyAnalysis from './components/WeeklyAnalysis';
 import DailyAnalysis from './components/DailyAnalysis';
-import PostureBanner from './components/PostureBanner';
+import Inspiration from './components/Inspiration';
+import Narratives from './components/Narratives';
+import RegimeBanner from './components/RegimeBanner';
 
 const API_BASE = "";
 
@@ -21,12 +23,12 @@ export default function MarketMindDashboard() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Filters
-  const [minRelevance, setMinRelevance] = useState(0);
+  // Filters. Default Priority >= 7 so the public feed shows only top-priority
+  // (HIGH/CRITICAL) news by default; friends can lower it to see the full stream.
+  const [minRelevance, setMinRelevance] = useState(7);
   const [minConfidence, setMinConfidence] = useState(0);
   const [minNovelty, setMinNovelty] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("ALL");
-  const [selectedSentiment, setSelectedSentiment] = useState("ALL");
   const [selectedSource, setSelectedSource] = useState("ALL");
   const [selectedSession, setSelectedSession] = useState("ALL");
 
@@ -147,11 +149,10 @@ export default function MarketMindDashboard() {
   };
 
   const resetFilters = () => {
-    setMinRelevance(0);
+    setMinRelevance(7);
     setMinConfidence(0);
     setMinNovelty(0);
     setSelectedCategory("ALL");
-    setSelectedSentiment("ALL");
     setSelectedSource("ALL");
     setSelectedSession("ALL");
     setSearchTerm(""); // This triggers useEffect -> fetchData('')
@@ -170,10 +171,9 @@ export default function MarketMindDashboard() {
     const matchesConfidence = (item.ml_context?.confidence || 0) >= minConfidence;
     const matchesNovelty = (item.novelty_score || 0) >= minNovelty;
     const matchesCategory = selectedCategory === "ALL" || (item.tags && item.tags.includes(selectedCategory));
-    const matchesSentiment = selectedSentiment === "ALL" || item.sentiment === selectedSentiment;
     const matchesSource = selectedSource === "ALL" || item.source === selectedSource;
     const matchesSession = selectedSession === "ALL" || item.ml_context?.session === selectedSession;
-    return matchesScore && matchesConfidence && matchesNovelty && matchesCategory && matchesSentiment && matchesSource && matchesSession;
+    return matchesScore && matchesConfidence && matchesNovelty && matchesCategory && matchesSource && matchesSession;
   });
 
   const marqueeDuration = Math.max(60, signals.length * 5);
@@ -209,8 +209,6 @@ export default function MarketMindDashboard() {
         </div>
         <Filters
           resetFilters={resetFilters}
-          selectedSentiment={selectedSentiment}
-          setSelectedSentiment={setSelectedSentiment}
           minRelevance={minRelevance}
           setMinRelevance={setMinRelevance}
           minConfidence={minConfidence}
@@ -259,19 +257,24 @@ export default function MarketMindDashboard() {
           marqueeSignals={marqueeSignals}
         />
 
-        {/* News-vol posture nowcast (shadow / decision-support) */}
-        <PostureBanner />
+        {/* Market-regime state (VIX/deployment posture — the real signal) */}
+        <RegimeBanner />
 
         {/* Content Body */}
         {activeTab === 'guide' ? (
              <UniverseGuide />
+        ) : activeTab === 'narratives' ? (
+            <Narratives />
         ) : activeTab === 'weekly' ? (
             <WeeklyAnalysis />
         ) : activeTab === 'daily' ? (
             <DailyAnalysis />
+        ) : activeTab === 'inspiration' ? (
+            <Inspiration />
         ) : (
             <Feed
               activeTab={activeTab}
+              setActiveTab={setActiveTab}
               searchTerm={searchTerm}
               setSearchTerm={setSearchTerm}
               handleScan={handleScan}
@@ -289,8 +292,6 @@ export default function MarketMindDashboard() {
       <Filters
         rightOpen={rightOpen}
         resetFilters={resetFilters}
-        selectedSentiment={selectedSentiment}
-        setSelectedSentiment={setSelectedSentiment}
         minRelevance={minRelevance}
         setMinRelevance={setMinRelevance}
         minConfidence={minConfidence}
