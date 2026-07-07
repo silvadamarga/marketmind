@@ -23,9 +23,9 @@ export default function MarketMindDashboard() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Filters. Default Priority >= 7 so the public feed shows only top-priority
-  // (HIGH/CRITICAL) news by default; friends can lower it to see the full stream.
-  const [minRelevance, setMinRelevance] = useState(7);
+  // Filters. Default Priority >= 4 so the public feed shows a broader stream by
+  // default; friends can raise it to see only top-priority (HIGH/CRITICAL) news.
+  const [minRelevance, setMinRelevance] = useState(4);
   const [minConfidence, setMinConfidence] = useState(0);
   const [minNovelty, setMinNovelty] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("ALL");

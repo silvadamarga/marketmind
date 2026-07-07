@@ -13,6 +13,10 @@ import monitor
 
 NEWS_QUEUE = queue.Queue()
 
+# Junk source apps to drop before analysis. "Baha News" pushes general/football
+# wire copy (…/topics/bbn-news-google-en), not market news — noise + Gemini spend.
+BLOCKED_SOURCES = ("baha",)
+
 _ALERT_THRESH_CACHE = {"ts": 0.0, "impact": IMPACT_THRESHOLD_HIGH, "novelty": NOVELTY_THRESHOLD_HIGH}
 
 
@@ -140,6 +144,13 @@ def process_news_queue():
             
             # 1. Extract Metadata
             title, body, source_app = extract_metadata(task)
+
+            # 1b. Drop blocked junk sources before spending analysis on them.
+            if any(b in source_app.lower() for b in BLOCKED_SOURCES):
+                print(f"🚫 Skipped blocked source '{source_app}': {title[:40]}")
+                NEWS_QUEUE.task_done()
+                continue
+
             full_text = f"{title} {body}"
             
             # 2. Fetch Context
@@ -155,8 +166,6 @@ def process_news_queue():
                 print(f"⚠️ Analysis Failed for '{title[:20]}...', using fallback.")
                 analysis = {
                     "title": title,
-                    "headline": title,
-                    "key_takeaway": body,
                     "sentiment": "NEUTRAL",
                     "impact_score": 0,
                     "novelty_score": 0,
