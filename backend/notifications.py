@@ -3,15 +3,19 @@ from config import DISCORD_WEBHOOK_URL
 
 def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=None):
     color_map = {"BULLISH": 0x00FF00, "BEARISH": 0xFF0000, "NEUTRAL": 0x3498DB}
-    color = color_map.get(analysis.get("sentiment"), 0x95A5A6)
+    color = color_map.get(analysis.get("sentiment_label"), 0x95A5A6)
 
+    # Title from the real analysis schema (sentiment_label / tickers / impact_score);
+    # skip empties so we never render "None" for a macro event with no ticker.
+    tickers = analysis.get("tickers") or []
+    head_bits = [b for b in (analysis.get("sentiment_label"), tickers[0] if tickers else None) if b]
     embed = {
-        "title": f"{analysis.get('action')} {analysis.get('ticker')} | {analysis.get('impact_score')}/10",
-        "description": f"**{analysis.get('headline', original_title)}**\n> *{analysis.get('thesis')}*",
+        "title": f"{' '.join(head_bits)} | {analysis.get('impact_score')}/10".lstrip(),
+        "description": f"**{original_title}**",
         "color": color,
         "fields": [
-            {"name": "Category", "value": analysis.get("event_category", "N/A"), "inline": True},
-            {"name": "Confidence", "value": f"{analysis.get('ai_confidence')}/10", "inline": True}
+            {"name": "Category", "value": analysis.get("category", "N/A"), "inline": True},
+            {"name": "Confidence", "value": f"{analysis.get('confidence')}/10", "inline": True}
         ],
         "footer": {"text": "Market Mind AI"}
     }
