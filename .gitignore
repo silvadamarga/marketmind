@@ -39,3 +39,6 @@ backend/regime_latest.json
 ml/
 posture_state.json
 *.db.bak
+backend/decide.json
+backend/forge_prep_card.json
+backend/llm_decision.json
