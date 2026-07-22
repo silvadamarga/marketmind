@@ -6,7 +6,6 @@ load_dotenv()
 # API Keys
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 # Pushbullet Config
 PUSHBULLET_STREAM_URL = os.getenv("PUSHBULLET_STREAM_URL", "wss://stream.pushbullet.com/websocket/")

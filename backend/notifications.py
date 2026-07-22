@@ -1,5 +1,35 @@
+import os
+
 import requests
-from config import DISCORD_WEBHOOK_URL
+
+# Signal relay (signal-bot on this box) — replaces the Discord webhook. Same
+# embed dicts are built by the senders below; _post renders them to plain text.
+SIGNAL_SEND_URL = os.getenv("SIGNAL_SEND_URL", "http://127.0.0.1:8420/send")
+SIGNAL_AUTH_TOKEN = os.getenv("SIGNAL_AUTH_TOKEN", "")
+
+_MAX_LEN = 4000  # relay caps messages at 4096
+
+
+def _post(embed, username="Market Mind"):
+    """Render an embed dict to text and send it via the Signal relay.
+    Returns True on a 2xx (send-then-mark callers rely on this)."""
+    parts = [f"■ {embed.get('title', username)}"]
+    if embed.get("description"):
+        parts.append(embed["description"])
+    for f in embed.get("fields", []):
+        parts.append(f"{f.get('name')}: {f.get('value')}")
+    footer = (embed.get("footer") or {}).get("text")
+    if footer:
+        parts.append(f"— {footer}")
+    text = "\n".join(parts).replace("**", "")
+    if len(text) > _MAX_LEN:
+        text = text[:_MAX_LEN - 2] + " …"
+    try:
+        resp = requests.post(SIGNAL_SEND_URL, json={"message": text},
+                             headers={"Authorization": SIGNAL_AUTH_TOKEN}, timeout=10)
+        return resp.status_code < 300
+    except requests.RequestException:
+        return False
 
 def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=None, trader=None, decide=None):
     color_map = {"BULLISH": 0x00FF00, "BEARISH": 0xFF0000, "NEUTRAL": 0x3498DB}
@@ -68,12 +98,9 @@ def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=N
             "value": f"{trader.get('call')}{conf_txt} ({trader.get('as_of')})",
             "inline": True
         })
-    # Return whether the alert actually reached Discord — the V3 alert ledger
-    # stamps alerted_at only on a real send (send-then-mark).
-    try:
-        resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind"})
-        return resp.ok
-    except: return False
+    # Return whether the alert actually reached the channel — the V3 alert
+    # ledger stamps alerted_at only on a real send (send-then-mark).
+    return _post(embed)
 
 def send_posture_alert(old_label, new_label, posture):
     """News-volatility regime change (shadow / decision-support — not a trade
@@ -105,9 +132,7 @@ def send_posture_alert(old_label, new_label, posture):
         "fields": fields,
         "footer": {"text": "Market Mind · posture (decision-support)"},
     }
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind"})
-    except: pass
+    _post(embed)
 
 
 def send_system_alert(title, message, color=0xFF0000):
@@ -117,6 +142,4 @@ def send_system_alert(title, message, color=0xFF0000):
         "color": color,
         "footer": {"text": "Market Mind System"}
     }
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind System"})
-    except: pass
+    _post(embed, username="Market Mind System")

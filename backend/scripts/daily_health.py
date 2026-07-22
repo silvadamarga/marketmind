@@ -173,6 +173,15 @@ def main():
     if sp1["cost"] > DAILY_BUDGET_USD:
         alerts.append(f"Gemini spend ${sp1['cost']:.2f}/24h over ${DAILY_BUDGET_USD:.2f} budget")
 
+    # Box-level: disk headroom and db growth (ops-plan phase 4).
+    st = os.statvfs("/")
+    disk_free_pct = st.f_bavail / st.f_blocks * 100
+    db_gb = os.path.getsize(args.db) / 1e9
+    if disk_free_pct < 15:
+        alerts.append(f"disk {disk_free_pct:.0f}% free — cleanup needed")
+    if db_gb > 1.0:
+        alerts.append(f"db {db_gb:.1f} GB — growth check due")
+
     digest = (
         f"events 24h/7d: {d1['n']}/{d7['n']} ({rate['ev_7d_vs_30d']:.0%} of 30d pace) | "
         f"FAILED 7d: {rate['failed_7d']:.0%} | emb(imp>=5): {rate['emb_7d']:.0%} | "
@@ -182,7 +191,8 @@ def main():
         f"tickers/ev: {rate['tick_7d']:.2f}/{rate['tick_30d']:.2f} | "
         f"market_data age: {md_age_h:.1f}h | forge age: {fa_h:.1f}h\n"
         f"gemini spend 24h/30d: ${sp1['cost']:.2f}/${sp30['cost']:.2f} "
-        f"({sp1['calls']}/{sp30['calls']} calls)"
+        f"({sp1['calls']}/{sp30['calls']} calls)\n"
+        f"disk free: {disk_free_pct:.0f}% | db: {db_gb * 1000:.0f} MB"
     )
     status = "🚨 " + "; ".join(alerts) if alerts else "✅ all checks pass"
     print(f"{status}\n{digest}")
