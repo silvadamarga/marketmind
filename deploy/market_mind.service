@@ -1,0 +1,19 @@
+[Unit]
+Description=Gunicorn instance to serve Market Mind
+After=network.target
+
+[Service]
+# User running the script (usually 'ubuntu' or 'root')
+User=notifier
+# Group=www-data
+WorkingDirectory=/var/www/market-mind/backend
+Environment="PATH=/var/www/market-mind/backend/venv/bin"
+# Your .env variables can be loaded here or from a file
+EnvironmentFile=/var/www/market-mind/backend/.env
+Environment=PYTHONUNBUFFERED=1
+
+# Command to start the app
+ExecStart=/var/www/market-mind/backend/venv/bin/uvicorn main:app --workers 1 --host 127.0.0.1 --port 8000
+
+[Install]
+WantedBy=multi-user.target

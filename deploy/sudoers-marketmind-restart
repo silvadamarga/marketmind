@@ -1,0 +1,13 @@
+# Scoped NOPASSWD rule so the forge deploy script can restart the app service
+# without an interactive password (BatchMode SSH). Grants exactly ONE command:
+# restarting market_mind.service. notifier retains no other passwordless sudo.
+#
+# Install on the VPS (as root):
+#   sudo install -m 0440 -o root -g root \
+#     sudoers-marketmind-restart /etc/sudoers.d/marketmind-restart
+#   sudo visudo -c            # validate syntax before trusting it
+#
+# Verify the systemctl path matches the box (some distros use /bin/systemctl):
+#   command -v systemctl
+# and edit the path below to match if needed.
+notifier ALL=(root) NOPASSWD: /usr/bin/systemctl restart market_mind.service
