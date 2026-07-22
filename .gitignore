@@ -36,7 +36,6 @@ backend/forge_inspiration_cache.json
 backend/regime_latest.json
 
 # forge-side artifacts living in this dir locally (not VPS code)
-ml/
 posture_state.json
 *.db.bak
 backend/decide.json
