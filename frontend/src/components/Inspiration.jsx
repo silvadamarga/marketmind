@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Lightbulb, RefreshCw, Sparkles, AlertTriangle, Eye, Newspaper, TrendingUp } from 'lucide-react';
+import { Activity, Lightbulb, RefreshCw, Sparkles, AlertTriangle, Eye, Newspaper, TrendingUp, Star } from 'lucide-react';
 
 const pct = (v, d = 1) => (typeof v === 'number' ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%` : '—');
 const whole = (v) => (typeof v === 'number' ? `${Math.round(v * 100)}%` : '—');
@@ -84,6 +84,30 @@ const IdeaCard = ({ idea }) => {
     );
 };
 
+// The LLM's single favorite from the ideas it generated — hero'd above the read.
+const TopPick = ({ pick, ideas }) => {
+    if (!pick || !pick.ticker) return null;
+    const idea = (ideas || []).find((i) => i.ticker === pick.ticker) || {};
+    return (
+        <section className="relative overflow-hidden rounded-xl border border-indigo-500/40 bg-gradient-to-br from-indigo-500/15 via-slate-900 to-slate-900 p-5 sm:p-6">
+            <div className="flex items-center space-x-2 text-indigo-300 mb-3">
+                <Star size={14} className="fill-indigo-400 text-indigo-400" />
+                <span className="text-xs font-bold uppercase tracking-widest">Top Pick</span>
+            </div>
+            <div className="flex items-baseline space-x-2 mb-2">
+                <h2 className="text-2xl font-bold text-white tracking-tight">{pick.ticker}</h2>
+                {idea.name && <span className="text-sm text-slate-400 truncate">{idea.name}</span>}
+                {idea.conviction && (
+                    <span className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${CONVICTION_STYLE[idea.conviction.toLowerCase()] || CONVICTION_STYLE.low}`}>
+                        {idea.conviction} conviction
+                    </span>
+                )}
+            </div>
+            <p className="text-slate-200 text-base leading-relaxed">{pick.why}</p>
+        </section>
+    );
+};
+
 export default function Inspiration() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -152,6 +176,9 @@ export default function Inspiration() {
 
                 {narration && (
                     <>
+                        {/* Top pick — the LLM's single favorite, hero'd */}
+                        <TopPick pick={narration.top_pick} ideas={narration.ideas} />
+
                         {/* Overall read */}
                         {narration.overall_read && (
                             <section>

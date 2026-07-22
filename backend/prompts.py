@@ -3,25 +3,21 @@
 GEMINI_ANALYSIS_PROMPT = """
     INPUT: Title: "{title}", Body: "{body}"
     
-    GOAL: 
+    GOAL:
     1. Create a clean, objective dataset for training a financial ML model.
-    2. Provide a context for the news event.
 
     TASK:
     1. Analyze the event body for market impact, sentiment, and relevance.
     2. Identify the event category, the specific ongoing topic, and tickers.
-    3. Synthesize your **internal knowledge** of the company (news, history, long-term drivers) or topic with the **recent real-time event** provided above.
 
     OUTPUT JSON (Strict):
     {{
-      "headline": "<Concise, neutral context based on the event and your knowledge about the company/topic>",
       "category": "RATING" | "MACRO" | "CENTRAL_BANK" | "GEOPOLITICS" | "REGULATION" | "SENTIMENT" | "CRYPTO" | "REAL_ESTATE" | "OTHER",
       "topic": "<The specific ONGOING, MARKET-RELEVANT story this event belongs to, as a terse snake_case noun phrase, max 4 words. NOT the broad category — the concrete subject. e.g. 'us_iran_relations', 'fed_rate_path', 'ai_chip_export_curbs', 'nvidia_earnings'. CRITICAL: reuse the EXACT same string for every event in the same ongoing story so they cluster — prefer a broader existing-sounding label over a hyper-specific new one (use 'us_iran_relations' not 'iran_closes_strait_2026'). RETURN EMPTY STRING \"\" unless this is clearly part of a recurring market story: one-off accidents, human-interest, local/regional non-market news, sports, generic market color, or a singular event with no ongoing thread all get \"\".>",
       "sentiment_label": "BULLISH" | "BEARISH" | "NEUTRAL",
       "impact_score": 0-10 (0=No impact, 1+ Impacts the sector or region, 10=Markets Crashing Event),
       "novelty_score": 1-10 (1=Old news/Repetitive, 10=Breaking/Unprecedented),
-      "tickers": ["SYMBOL"] (max 3, empty if none), 
-      "key_takeaway": "<Key takeaway why this event is impactful or not>",
+      "tickers": ["SYMBOL"] (max 3, empty if none),
       "ml_tags": ["earnings_beat", "guidance_raise", "fed_speak", "inflation_data"]
       "confidence": 1-10,
     }}
@@ -91,7 +87,11 @@ FORGE_INSPIRATION_PROMPT = """
 
     OUTPUT JSON (Strict):
     {{
-      "overall_read": "<2-4 sentences: the shape of the cohort right now — where the strength clusters (which factors/sectors), the regime backdrop, and the broad opportunity. Opinionated but grounded.>",
+      "overall_read": "<2-4 sentences: the shape of the cohort right now — where the strength clusters (which factors/sectors) and the broad opportunity. You MAY note the risk-on/risk-off backdrop in passing, but do NOT quote a precise level (no '8.5% over the 200d MA'); it's slow-moving context, not a headline. Opinionated but grounded.>",
+      "top_pick": {{
+        "ticker": "<the ONE name you would flag first — your single favorite from the `ideas` below. MUST be one of the tickers you list in `ideas`.>",
+        "why": "<1-2 sentences: why this beats the others today — the strongest, most corroborated case in the cohort (several aligned factors, FV upside, standout ProTip). This is your pick to research first.>"
+      }},
       "ideas": [
         {{
           "ticker": "<symbol>",
@@ -107,9 +107,13 @@ FORGE_INSPIRATION_PROMPT = """
     }}
 
     GUIDELINES:
-    - Cover the top 6-10 names by composite; skip names with almost no data.
+    - The input's FEATURED NAMES are today's selection through a stated ANGLE (e.g.
+      value, momentum, recent movers); cover those names and let the angle shape the
+      framing. Skip names with almost no data.
     - Reward CORROBORATION: a name strong across several factors beats a one-factor
-      spike. Reflect that in conviction.
+      spike. Reflect that in conviction — and let it drive `top_pick`: your favorite
+      should be the best-corroborated, highest-conviction name, not a lottery ticket.
+    - `top_pick.ticker` MUST appear in `ideas`. Pick exactly one.
     - Vary the language; don't template every idea identically.
     """
 

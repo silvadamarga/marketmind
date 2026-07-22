@@ -1,160 +1,131 @@
 import React from 'react';
-import { BookOpen, Activity, Zap, Droplets, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Zap, Droplets, Compass } from 'lucide-react';
+import { BIAS, BIAS_FLAG, BIAS_THRESHOLDS } from '../utils/constants';
+
+const STATES = [BIAS.STRONG_BULL, BIAS.BULL, BIAS.NEUTRAL, BIAS.BEAR, BIAS.STRONG_BEAR];
+const FLAGS = [BIAS_FLAG.EXTENDED, BIAS_FLAG.WASHED];
 
 export default function UniverseGuide() {
     return (
         <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-            <div className="max-w-4xl mx-auto space-y-8">
-                
+            <div className="max-w-3xl mx-auto space-y-8">
+
                 <div className="text-center mb-10">
-                    <h1 className="text-3xl font-bold text-white mb-2">Universe Guide</h1>
-                    <p className="text-slate-400">Understanding the metrics and signals in the MarketMind Universe Bar.</p>
+                    <h1 className="text-3xl font-bold text-white mb-2">The Bias Read</h1>
+                    <p className="text-slate-400">Grasp the market at a glance — which sectors lead, which lag.</p>
                 </div>
 
-                {/* Market Conditions Section */}
+                {/* The logic, in one line */}
                 <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6">
-                    <div className="flex items-center space-x-3 mb-6">
-                        <Activity className="text-indigo-400" size={24} />
-                        <h2 className="text-xl font-bold text-white">Market Conditions</h2>
+                    <div className="flex items-center space-x-3 mb-4">
+                        <Compass className="text-indigo-400" size={22} />
+                        <h2 className="text-lg font-bold text-white">How it's built</h2>
                     </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <Zap className="text-rose-400" size={18} />
-                                <h3 className="font-bold text-rose-400">Overbought</h3>
-                            </div>
-                            <p className="text-sm text-slate-300 mb-2">RSI &gt; 70</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                The asset may be overvalued and due for a pullback. Price has risen too fast relative to recent history.
-                            </p>
-                        </div>
-
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <Droplets className="text-emerald-400" size={18} />
-                                <h3 className="font-bold text-emerald-400">Oversold</h3>
-                            </div>
-                            <p className="text-sm text-slate-300 mb-2">RSI &lt; 30</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                The asset may be undervalued and due for a bounce. Price has fallen too fast relative to recent history.
-                            </p>
-                        </div>
-
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <AlertTriangle className="text-amber-400" size={18} />
-                                <h3 className="font-bold text-amber-400">High Volatility</h3>
-                            </div>
-                            <p className="text-sm text-slate-300 mb-2">RVOL &gt; 2.0</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                Volume is at least 2x the average. Expect larger price swings and potential breakout moves.
-                            </p>
-                        </div>
-                    </div>
+                    <p className="text-sm text-slate-300 leading-relaxed mb-3">
+                        <span className="text-white font-semibold">Sectors</span> (the XL* ETFs) are read{' '}
+                        <span className="text-white font-semibold">relative to SPY</span>: bullish when they{' '}
+                        <span className="text-emerald-400 font-semibold">lead</span> the market, bearish when
+                        they <span className="text-rose-400 font-semibold">lag</span> — so leadership shows even
+                        on all-red or all-green days. The tape is sorted leaders → laggards.
+                    </p>
+                    <p className="text-sm text-slate-300 leading-relaxed mb-3">
+                        <span className="text-white font-semibold">SPY, indices and macro</span> (VIX, yields,
+                        dollar, BTC) are read <span className="text-white font-semibold">absolute</span> — they
+                        set the regime, not a sector call.
+                    </p>
+                    <p className="text-sm text-slate-300 leading-relaxed">
+                        <span className="text-white font-semibold">Volume (RVOL)</span> upgrades a move to{' '}
+                        <span className="text-emerald-400 font-semibold">Strong</span> when confirmed;{' '}
+                        <span className="text-white font-semibold">RSI</span> only adds a caution flag when
+                        stretched. Hover any ticker for the full intraday read (VWAP structure, RS, RSI) behind
+                        the decision.
+                    </p>
                 </div>
 
-                {/* Intraday Signals Section */}
+                {/* Bias states — driven off the same source as the tape */}
                 <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6">
-                    <div className="flex items-center space-x-3 mb-6">
-                        <TrendingUp className="text-amber-400" size={24} />
-                        <h2 className="text-xl font-bold text-white">Intraday Signals</h2>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <Activity className="text-amber-400" size={18} />
-                                <h3 className="font-bold text-amber-400">High RVOL</h3>
+                    <h2 className="text-lg font-bold text-white mb-4">The five states</h2>
+                    <div className="space-y-2">
+                        {STATES.map((s) => (
+                            <div key={s.key} className="flex items-center gap-4 p-3 rounded-lg bg-slate-800/40 border border-slate-700/40">
+                                <div className="flex items-center gap-2 w-32 shrink-0">
+                                    <div className={`w-[3px] h-8 rounded-full ${s.accent}`}></div>
+                                    <span className={`text-sm font-bold ${s.text}`}>{s.glyph}</span>
+                                    <span className={`text-sm font-bold ${s.text}`}>{s.label}</span>
+                                </div>
+                                <p className="text-xs text-slate-400 leading-relaxed">{s.desc}</p>
                             </div>
-                            <p className="text-sm text-slate-300 mb-2">Relative Volume &gt; 1.5x</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                Heavy trading activity. Institutional interest is likely present.
-                            </p>
-                        </div>
-
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <TrendingUp className="text-emerald-400" size={18} />
-                                <h3 className="font-bold text-emerald-400">Momentum</h3>
-                            </div>
-                            <p className="text-sm text-slate-300 mb-2">Price &gt; VWAP + High Vol</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                Bulls are in control. Price is holding above the average weighted price.
-                            </p>
-                        </div>
-
-                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                            <div className="flex items-center space-x-2 mb-2">
-                                <TrendingUp className="text-rose-400 rotate-180" size={18} />
-                                <h3 className="font-bold text-rose-400">Heavy</h3>
-                            </div>
-                            <p className="text-sm text-slate-300 mb-2">Price &lt; VWAP + High Vol</p>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                Bears are in control. Price is failing to reclaim the average weighted price.
-                            </p>
-                        </div>
+                        ))}
                     </div>
                 </div>
 
-                {/* Metrics Explanation */}
+                {/* Caution flags */}
+                <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6">
+                    <h2 className="text-lg font-bold text-white mb-4">Caution flags</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {FLAGS.map((f) => {
+                            const Icon = f.icon === 'zap' ? Zap : Droplets;
+                            return (
+                                <div key={f.key} className="p-4 rounded-lg bg-slate-800/40 border border-slate-700/40">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <Icon size={16} className={f.text} />
+                                        <span className={`text-sm font-bold ${f.text}`}>{f.label}</span>
+                                    </div>
+                                    <p className="text-xs text-slate-400 leading-relaxed">{f.desc}</p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Thresholds + reading a cell */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6">
-                        <h3 className="text-lg font-bold text-white mb-4">Key Metrics</h3>
-                        <ul className="space-y-4">
-                            <li className="flex items-start space-x-3">
-                                <div className="mt-1 min-w-[4px] h-4 bg-blue-500 rounded-full"></div>
-                                <div>
-                                    <span className="block font-bold text-slate-200 text-sm">RSI (Relative Strength Index)</span>
-                                    <span className="text-xs text-slate-400">Momentum oscillator measuring speed and change of price movements. Range 0-100.</span>
-                                </div>
-                            </li>
-                            <li className="flex items-start space-x-3">
-                                <div className="mt-1 min-w-[4px] h-4 bg-amber-500 rounded-full"></div>
-                                <div>
-                                    <span className="block font-bold text-slate-200 text-sm">RVOL (Relative Volume)</span>
-                                    <span className="text-xs text-slate-400">Ratio of current volume to average volume. RVOL &gt; 1 indicates higher than normal activity.</span>
-                                </div>
-                            </li>
-                            <li className="flex items-start space-x-3">
-                                <div className="mt-1 min-w-[4px] h-4 bg-purple-500 rounded-full"></div>
-                                <div>
-                                    <span className="block font-bold text-slate-200 text-sm">VWAP (Volume Weighted Avg Price)</span>
-                                    <span className="text-xs text-slate-400">The average price a security has traded at throughout the day, based on both volume and price.</span>
-                                </div>
-                            </li>
+                        <h3 className="text-lg font-bold text-white mb-4">Thresholds</h3>
+                        <ul className="space-y-3 text-sm">
+                            <li className="flex justify-between"><span className="text-slate-400">Sector leads / lags</span><span className="font-mono text-slate-200">|vs SPY| ≥ {BIAS_THRESHOLDS.RS_FLAT}%</span></li>
+                            <li className="flex justify-between"><span className="text-slate-400">Strong lead / lag</span><span className="font-mono text-slate-200">|vs SPY| ≥ {BIAS_THRESHOLDS.RS_STRONG}%</span></li>
+                            <li className="flex justify-between"><span className="text-slate-400">Volume-confirmed</span><span className="font-mono text-amber-400">RVOL ≥ {BIAS_THRESHOLDS.NOTABLE_RVOL}x</span></li>
+                            <li className="flex justify-between"><span className="text-slate-400">Meaningful move</span><span className="font-mono text-slate-200">|change| ≥ {BIAS_THRESHOLDS.BIG_MOVE}%</span></li>
+                            <li className="flex justify-between"><span className="text-slate-400">Extended (hot)</span><span className="font-mono text-rose-400">RSI &gt; {BIAS_THRESHOLDS.RSI_HOT}</span></li>
+                            <li className="flex justify-between"><span className="text-slate-400">Washed (cold)</span><span className="font-mono text-emerald-400">RSI &lt; {BIAS_THRESHOLDS.RSI_COLD}</span></li>
                         </ul>
+                        <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+                            Tuned for regular trading hours. Index-type tickers with no volume (VIX, yields,
+                            dollar) fall back to a change-driven read.
+                        </p>
                     </div>
 
                     <div className="bg-[#131b2e] border border-slate-800 rounded-xl p-6">
-                        <h3 className="text-lg font-bold text-white mb-4">Reading the Tape</h3>
-                        <div className="space-y-4">
-                            <div className="p-3 bg-black/30 rounded border border-slate-800 flex items-center justify-between">
-                                <div className="flex flex-col">
-                                    <span className="font-bold text-white">SPY</span>
-                                    <span className="text-[10px] text-slate-500 uppercase">S&P 500</span>
+                        <h3 className="text-lg font-bold text-white mb-4">Reading a cell</h3>
+                        <div className="p-3 bg-black/30 rounded-lg border border-slate-800 flex items-stretch gap-3">
+                            <div className="w-[3px] rounded-full bg-emerald-400"></div>
+                            <div className="flex flex-col justify-center gap-1 flex-1">
+                                <div className="flex items-baseline justify-between gap-2">
+                                    <div className="flex items-baseline gap-1.5">
+                                        <span className="font-mono text-[9px] font-bold text-slate-500">#1</span>
+                                        <span className="text-[11px] font-bold text-emerald-400">▲▲</span>
+                                        <span className="font-bold text-[13px] tracking-tight text-slate-100">XLE</span>
+                                    </div>
+                                    <span className="font-mono text-xs font-bold text-emerald-400 tabular-nums">+1.4%</span>
                                 </div>
-                                <div className="flex flex-col items-end">
-                                    <span className="font-mono text-emerald-300">$450.20</span>
-                                    <div className="flex items-center space-x-1">
-                                        <span className="text-emerald-400 text-xs">+1.2%</span>
-                                        <span className="text-[9px] font-bold text-amber-400 bg-amber-400/10 px-1 rounded border border-amber-400/20">2.5x</span>
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] text-slate-500">Energy</span>
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="font-mono text-[10px] text-slate-400 tabular-nums">$88.40</span>
+                                        <span className="font-mono text-[9px] font-bold text-amber-400/90 tabular-nums">2.5x</span>
+                                        <Zap size={10} className="text-amber-400" />
                                     </div>
                                 </div>
-                                <div className="bg-rose-500/20 text-rose-400 px-2 py-1 rounded text-[10px] font-bold border border-rose-500/30">
-                                    OB
-                                </div>
                             </div>
-                            <p className="text-xs text-slate-400">
-                                The ticker tape shows real-time data. 
-                                <br/><br/>
-                                1. <strong>Price Color</strong>: Green if Price &gt; VWAP, Red if Price &lt; VWAP.
-                                <br/>
-                                2. <strong>RVOL Badge</strong>: Appears in amber (e.g., 2.5x) if volume is unusually high.
-                                <br/>
-                                3. <strong>Status Badge</strong>: Quick indicator of market condition (OB=Overbought, OS=Oversold, Momentum Icons).
-                            </p>
                         </div>
+                        <ul className="text-xs text-slate-400 mt-4 space-y-1.5">
+                            <li><span className="text-slate-200 font-semibold">#1</span> — leadership rank vs SPY (#1 = today's strongest sector).</li>
+                            <li><span className="text-slate-200 font-semibold">▲▲ + symbol</span> — direction, conviction &amp; the ticker.</li>
+                            <li><span className="text-slate-200 font-semibold">Change %</span> — the move, coloured by bias.</li>
+                            <li><span className="text-slate-200 font-semibold">Name</span> — plain-english what it is (Energy = XLE).</li>
+                            <li><span className="text-slate-200 font-semibold">Price · RVOL · ⚡/💧</span> — support &amp; caution; hover for the rest.</li>
+                        </ul>
                     </div>
                 </div>
 

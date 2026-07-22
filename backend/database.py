@@ -128,6 +128,13 @@ def init_db():
             try:
                 c.execute("ALTER TABLE news_events ADD COLUMN topic TEXT")
             except sqlite3.OperationalError: pass
+            try:
+                # Alert ledger (vps-trader-integration V3): stamped when a
+                # Discord alert actually sends; NULL = never alerted. No
+                # backfill — history was Discord-only, rows populate from
+                # deploy day forward (ml_score_json precedent).
+                c.execute("ALTER TABLE news_events ADD COLUMN alerted_at TEXT")
+            except sqlite3.OperationalError: pass
 
             # Indexes
             c.execute("CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(event_category)")
@@ -144,6 +151,20 @@ def init_db():
                             report_json TEXT,
                             created_at TEXT
                         )''')
+
+            # Gemini spend ledger — one row per generate_content call (usage.py).
+            # Lets daily_health.py total the day's cost and alert on a budget breach.
+            c.execute('''CREATE TABLE IF NOT EXISTS gemini_usage (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts TEXT NOT NULL,
+                            call_type TEXT NOT NULL,
+                            model TEXT NOT NULL,
+                            prompt_tokens INTEGER,
+                            output_tokens INTEGER,
+                            thought_tokens INTEGER,
+                            est_cost_usd REAL
+                        )''')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_gemini_usage_ts ON gemini_usage(ts)')
             conn.commit()
         print(f"✅ Database initialized: {DB_FILE}")
     except Exception as e:
@@ -175,7 +196,7 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
             primary_ticker = analysis.get("ticker")
             
         sentiment = analysis.get("sentiment_label") or analysis.get("sentiment")
-        thesis = analysis.get("key_takeaway") or analysis.get("thesis")
+        thesis = analysis.get("thesis")  # prose retired; tagging no longer emits a thesis
         category = analysis.get("category") or analysis.get("event_category")
         confidence = analysis.get("confidence") or analysis.get("ai_confidence")
         # normalize the fine topic key so near-identical strings cluster (lower/trim);
@@ -216,3 +237,18 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
     except Exception as e:
         print(f"⚠️ News Logging Failed: {e}")
         return None
+
+def mark_alerted(event_id):
+    """Alert ledger (V3): stamp news_events.alerted_at once a Discord alert has
+    actually sent. Send-then-mark — a failed send leaves NULL, which is the
+    correct record. Never raises into the alert path."""
+    if not event_id:
+        return
+    try:
+        with get_db_connection() as conn:
+            conn.execute("UPDATE news_events SET alerted_at = ? WHERE id = ?",
+                         (datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                          event_id))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ alerted_at stamp failed: {e}")

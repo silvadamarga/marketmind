@@ -33,19 +33,38 @@ def _signed(v, places=1):
     return f"{v:+.{places}%}" if isinstance(v, (int, float)) else "—"
 
 
+def _featured_rows(digest):
+    """The cohort rows to narrate today, in order. The forge ships a rotating
+    `spotlight` (a daily lens over the cohort — movers/value/momentum/…) so the
+    page varies day to day; feature those names. Falls back to the composite-
+    sorted head for older digests with no spotlight block."""
+    cohort = digest.get("cohort", [])
+    spot = digest.get("spotlight") or {}
+    order = spot.get("tickers")
+    if not order:
+        return cohort[:TOP_N]
+    by_ticker = {r.get("ticker"): r for r in cohort}
+    rows = [by_ticker[t] for t in order if t in by_ticker]
+    return rows[:TOP_N]
+
+
 def _format_brief(digest):
-    """Render the digest into the prompt's INPUT DATA text — regime + top-N rows
-    with factor percentiles, fair value, standout ProTips, and recent changes."""
+    """Render the digest into the prompt's INPUT DATA text — regime + today's
+    featured rows with factor percentiles, fair value, standout ProTips, and
+    recent changes."""
     lines = [f"AS_OF: {digest.get('as_of')}  (staleness: {digest.get('staleness')})"]
     regime = digest.get("regime") or {}
     if regime:
         risk = "RISK-ON" if regime.get("regime.risk_on") else "RISK-OFF"
-        dist = regime.get("regime.spy_dist_ma200")
-        lines.append(f"MARKET REGIME: {risk}"
-                     + (f" (SPY {dist:+.1%} vs 200d MA)" if isinstance(dist, (int, float)) else ""))
+        # Broad backdrop only — the precise SPY/200d-MA distance is a slow-moving
+        # number that read as static boilerplate when quoted verbatim every day.
+        lines.append(f"MARKET REGIME: {risk} (broad backdrop only — do not quote a precise level)")
+    spot = digest.get("spotlight") or {}
+    if spot.get("lens"):
+        lines.append(f"TODAY'S ANGLE: {spot['lens']} — {spot.get('rationale', '')}")
     lines.append("")
-    lines.append("COHORT (top names by composite; factor values are cohort percentiles):")
-    for r in digest.get("cohort", [])[:TOP_N]:
+    lines.append("FEATURED NAMES (today's angle; factor values are cohort percentiles):")
+    for r in _featured_rows(digest):
         f = r.get("factors", {})
         def fp(name):
             return _pct((f.get(name) or {}).get("pct"))
@@ -76,7 +95,7 @@ def _format_brief(digest):
 
 def _latest_news(tickers):
     """Most recent factual news_event per ticker from the live VPS DB, with a 21d
-    recency count. {ticker: {headline, takeaway, date, impact, recent_count}}."""
+    recency count. {ticker: {headline, date, impact, recent_count}}."""
     out = {}
     if not tickers:
         return out
@@ -87,26 +106,19 @@ def _latest_news(tickers):
             cur = conn.cursor()
             for t in tickers:
                 row = cur.execute(
-                    "SELECT title, ai_analysis_json, impact_score, timestamp "
+                    "SELECT title, impact_score, timestamp "
                     "FROM news_events WHERE related_ticker = ? "
                     "AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) "
                     "ORDER BY timestamp DESC LIMIT 1", (t,)).fetchone()
                 if not row:
                     continue
-                ai = {}
-                if row["ai_analysis_json"]:
-                    try:
-                        ai = json.loads(row["ai_analysis_json"])
-                    except (ValueError, TypeError):
-                        ai = {}
                 cnt = cur.execute(
                     "SELECT COUNT(*) n FROM news_events WHERE related_ticker = ? "
                     "AND timestamp >= ? "
                     "AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING'))",
                     (t, since)).fetchone()["n"]
                 out[t] = {
-                    "headline": ai.get("headline") or row["title"],
-                    "takeaway": ai.get("key_takeaway"),
+                    "headline": row["title"],
                     "date": row["timestamp"],
                     "impact": row["impact_score"],
                     "recent_count": cnt,
@@ -160,15 +172,19 @@ def get_inspiration(refresh=False):
         return {"message": "No forge brief yet — the forge has not pushed forge_brief.json."}
 
     as_of = digest.get("as_of")
+    # Cache identity = snapshot date + today's rotating lens, so the narration
+    # refreshes when the angle rotates even if the underlying pro snapshot hasn't.
+    spot = digest.get("spotlight") or {}
+    cache_key = f"{as_of}:{spot.get('lens', '-')}:{spot.get('rotation_day', '-')}"
     cache = _read_cache()
     stale_narration = False
 
-    if not refresh and cache and cache.get("as_of") == as_of:
+    if not refresh and cache and cache.get("cache_key") == cache_key:
         narration = cache.get("narration")
     else:
         narration = analysis.generate_forge_inspiration(_format_brief(digest))
         if narration:
-            _write_cache({"as_of": as_of,
+            _write_cache({"as_of": as_of, "cache_key": cache_key,
                           "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                           "narration": narration})
         elif cache:                       # degrade: reuse prior narration
@@ -185,5 +201,6 @@ def get_inspiration(refresh=False):
         "narration": _enrich_ideas(narration, digest),
         "summary": digest.get("summary"),
         "weights": digest.get("weights"),
+        "spotlight": digest.get("spotlight"),
         "stale_narration": stale_narration,
     }

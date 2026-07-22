@@ -14,7 +14,8 @@ export default function Header({
     handleExport,
     signals,
     marqueeDuration,
-    marqueeSignals
+    marqueeSignals,
+    spyChange
 }) {
     return (
         <header className="flex flex-col border-b border-slate-800 bg-[#0f1422]/50 backdrop-blur-md w-full z-30 sticky top-0">
@@ -43,7 +44,7 @@ export default function Header({
             </div>
 
             {/* Ticker Tape */}
-            <UniverseBar signals={signals} marqueeDuration={marqueeDuration} marqueeSignals={marqueeSignals} />
+            <UniverseBar signals={signals} marqueeDuration={marqueeDuration} marqueeSignals={marqueeSignals} spyChange={spyChange} />
         </header>
     );
 }

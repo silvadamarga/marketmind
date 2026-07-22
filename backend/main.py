@@ -204,12 +204,17 @@ def _attach_narrative_impact(cursor, rows, items):
     with no embedding or no built narrative."""
     import narrative
     try:
-        centroids = {(r["entity_type"], r["entity"]): r["centroid"]
-                     for r in cursor.execute(
-                         "SELECT entity_type, entity, centroid FROM narratives "
-                         "WHERE centroid IS NOT NULL")}
+        centroids = {}
+        for r in cursor.execute(
+                "SELECT entity_type, entity, centroid, aliases FROM narratives "
+                "WHERE centroid IS NOT NULL"):
+            centroids[(r["entity_type"], r["entity"])] = r["centroid"]
+            # snapped topic spellings resolve to their canonical story's centroid
+            if r["aliases"]:
+                for a in json.loads(r["aliases"]):
+                    centroids[(r["entity_type"], a)] = r["centroid"]
     except Exception:
-        return  # narratives table not built yet
+        return  # narratives table not built yet (or pre-aliases schema)
     if not centroids:
         return
     for row, item in zip(rows, items):

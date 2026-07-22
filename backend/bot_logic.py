@@ -4,11 +4,13 @@ import time
 import threading
 from config import (MIN_IMPACT_SCORE, IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH,
                     ALERT_IMPACT_RATE, ALERT_NOVELTY_RATE, ALERT_WINDOW_DAYS, ALERT_MIN_ROWS)
-from database import log_news_event, safe_round, get_db_connection
+from database import log_news_event, mark_alerted, safe_round, get_db_connection
 from analysis import get_gemini_analysis, get_text_embedding
 from notifications import send_news_alert
 from ml_scorer import score_event
+import forge_decide
 import forge_rank
+import llm_calls
 import monitor
 
 NEWS_QUEUE = queue.Queue()
@@ -18,6 +20,29 @@ NEWS_QUEUE = queue.Queue()
 BLOCKED_SOURCES = ("baha",)
 
 _ALERT_THRESH_CACHE = {"ts": 0.0, "impact": IMPACT_THRESHOLD_HIGH, "novelty": NOVELTY_THRESHOLD_HIGH}
+
+# Direction-change alert gate: once a ticker has alerted, it only re-alerts when
+# its sentiment FLIPS (2026-07-08: 12 USO cards for the same oil story). Keyed on
+# a normalized ticker so alias symbols share one gate. Seen-time refreshes while
+# the story keeps flowing; a story quiet for the TTL re-arms. In-memory on
+# purpose — a restart costs at most one repeat card per ticker.
+ALERT_REPEAT_TTL_S = 24 * 3600
+_TICKER_ALIAS = {"OIL": "USO", "DJI": "DIA", "DJIA": "DIA", "^DJI": "DIA"}
+_LAST_ALERT = {}  # normalized ticker -> [sentiment_label, last_seen_ts]
+
+
+def _repeat_direction(ticker, label):
+    """True when this ticker already alerted with the same sentiment inside the
+    TTL. No-ticker (macro) events never suppress. Records the (ticker, label)
+    either way so callers just gate on the return."""
+    if not ticker:
+        return False
+    key = _TICKER_ALIAS.get(ticker, ticker)
+    now = time.time()
+    prev = _LAST_ALERT.get(key)
+    _LAST_ALERT[key] = [label, now]
+    return (prev is not None and prev[0] == label
+            and now - prev[1] < ALERT_REPEAT_TTL_S)
 
 
 def _rate_threshold(vals, rate, fallback):
@@ -112,7 +137,7 @@ def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regim
     if impact >= 5: # Threshold for "worth remembering"
         embedding = get_text_embedding(full_text)
 
-    log_news_event(
+    event_id = log_news_event(
         task,
         analysis,
         embedding=embedding,
@@ -130,9 +155,25 @@ def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regim
         impact_thr, novelty_thr = get_alert_thresholds()
 
         if impact >= impact_thr or novelty >= novelty_thr:
-            forge = forge_rank.lookup(analysis.get("ticker") or
-                                      (analysis.get("tickers") or [None])[0])
-            send_news_alert(analysis, title, source_app, ml_score=ml_score, forge=forge)
+            ticker = (analysis.get("ticker") or
+                      (analysis.get("tickers") or [None])[0])
+            label = analysis.get("sentiment_label") or analysis.get("sentiment")
+            if _repeat_direction(ticker, label):
+                print(f"🔇 Skipped repeat direction: {ticker} still {label}")
+            else:
+                # Mirrored pushes carry the channel name in `title` ("Breaking
+                # news", "Investing.com") and the real headline in `body`.
+                headline = (task.get("body") or "").strip()[:300] or title
+                forge = forge_rank.lookup(ticker)
+                trader = llm_calls.lookup(ticker)
+                decide = forge_decide.lookup(ticker)
+                sent = send_news_alert(analysis, headline, source_app,
+                                       ml_score=ml_score, forge=forge,
+                                       trader=trader, decide=decide)
+                # Alert ledger (V3): send-then-mark — only a delivered alert
+                # stamps the row; a failed send leaves NULL, correct.
+                if sent:
+                    mark_alerted(event_id)
         else:
             print(f"📉 Skipped Low Impact/Novelty: Impact={impact}, Novelty={novelty} (thr {impact_thr}/{novelty_thr})")
 

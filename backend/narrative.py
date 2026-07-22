@@ -34,6 +34,13 @@ HEADLINE_SHIFT = 0.30      # single headline this far from story centroid -> cou
 HEADLINE_NUDGE = 0.24      # this far -> develops the story (calibrated: consistent Iran-deal
                            # repeats cluster ~0.17-0.24, off-thread/new events ~0.30-0.41)
 MAX_SYNTH_PER_BUILD = 5     # cost cap: at most N Gemini calls per build
+TOPIC_SNAP_THETA = 0.12    # topic-centroid cosine distance under which a smaller fine topic
+                           # is aliased onto a bigger near-duplicate one (calibrated 2026-07-17:
+                           # true duplicate pairs sit <=0.115 — us_iran_relations/us_iran_tensions
+                           # 0.046, ai_hardware_boom/demand 0.046 — while the closest DISTINCT
+                           # stories start at 0.128, fed_rate_path vs us_inflation_trends; note
+                           # 0.24 would be far too loose on this basis: event-vs-centroid and
+                           # centroid-vs-centroid distances live on different scales)
 
 
 def _centroid(vectors):
@@ -84,22 +91,48 @@ def _ensure(cur):
     cur.execute(_CREATE)
     # additive migration for the LLM-synthesis layer (idempotent)
     for col, decl in (("centroid", "TEXT"), ("synthesis_json", "TEXT"),
-                      ("last_synth", "TEXT")):
+                      ("last_synth", "TEXT"), ("aliases", "TEXT")):
         try:
             cur.execute(f"ALTER TABLE narratives ADD COLUMN {col} {decl}")
         except Exception:
             pass  # column already exists
 
 
+def _snap_topics(counts, centroids):
+    """Alias near-duplicate fine topics onto their biggest sibling (1C embedding-snap).
+    Gemini fragments one story across spelling variants (us_iran_relations vs
+    us_iran_tensions); string reuse alone can't heal it. Biggest-first: each topic
+    either becomes a root or snaps to the nearest already-rooted topic whose centroid
+    is within TOPIC_SNAP_THETA. Recomputed every build from window events only, so a
+    wrong snap is never sticky. Returns {alias_topic: canonical_topic}."""
+    aliases = {}
+    roots = []
+    for t in sorted(centroids, key=lambda t: (-counts.get(t, 0), t)):
+        if centroids[t] is None:
+            continue
+        best, best_d = None, TOPIC_SNAP_THETA
+        for r in roots:
+            d = _cosine_dist(centroids[t], centroids[r])
+            if d is not None and d < best_d:
+                best, best_d = r, d
+        if best:
+            aliases[t] = best
+        else:
+            roots.append(t)
+    return aliases
+
+
 def _rows_for(cur, column, value, since, exclude_topics=None):
     """Recent, factual (noise-excluded) events for one entity, newest first.
+    `value` may be a list (a snapped topic's canonical name + its aliases).
     `exclude_topics` drops events already claimed by a qualifying fine topic — used
     so a category catch-all card doesn't double-count events that have their own card."""
-    sql = (f"SELECT title, ai_analysis_json, category, impact_score, "
+    values = list(value) if isinstance(value, (list, tuple)) else [value]
+    sql = (f"SELECT title, body, ai_analysis_json, category, impact_score, "
            f"timestamp, source_app, embedding FROM news_events "
-           f"WHERE {column} = ? AND timestamp >= ? "
+           f"WHERE {column} IN ({','.join('?' * len(values))}) AND timestamp >= ? "
            f"AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) ")
-    params = [value, since]
+    params = [*values, since]
     if exclude_topics:
         sql += f"AND (topic IS NULL OR topic NOT IN ({','.join('?' * len(exclude_topics))})) "
         params.extend(exclude_topics)
@@ -120,8 +153,8 @@ def _card(entity_type, entity, rows):
                 ai = {}
         parsed.append({
             "date": r["timestamp"],
-            "headline": ai.get("headline") or r["title"],
-            "takeaway": ai.get("key_takeaway"),     # factual "why it matters"
+            # real headline lives in `body`; `title` holds the publisher name
+            "headline": r["body"] or r["title"],
             "source": r["source_app"],
             "impact": r["impact_score"] or 0,
             "novelty": ai.get("novelty_score") or 0,    # lives in ai_analysis_json
@@ -146,12 +179,11 @@ def _card(entity_type, entity, rows):
             break
     top = sorted(picks, key=lambda e: e["date"], reverse=True)
     developments = [{"date": e["date"], "headline": e["headline"],
-                     "takeaway": e["takeaway"], "source": e["source"]} for e in top]
+                     "source": e["source"]} for e in top]
     # the single newest event — the "what just changed" shown on the card face
     newest = parsed[0] if parsed else None
     latest_update = ({"date": newest["date"], "headline": newest["headline"],
-                      "takeaway": newest["takeaway"], "source": newest["source"],
-                      "impact": newest["impact"]}
+                      "source": newest["source"], "impact": newest["impact"]}
                      if newest else None)
 
     themes = [t for t, _ in Counter(t for e in parsed for t in e["tags"]).most_common(6)]
@@ -194,8 +226,7 @@ def _event_vectors(rows):
 
 
 def _fmt_dev(d):
-    return (f"- ({d['date'][:10]}, {d.get('source','?')}) {d['headline']}"
-            + (f" — {d['takeaway']}" if d.get("takeaway") else ""))
+    return f"- ({d['date'][:10]}, {d.get('source','?')}) {d['headline']}"
 
 
 def _events_text(card):
@@ -275,7 +306,10 @@ def build_narratives(synthesize=True):
             "GROUP BY related_ticker HAVING n >= ?", (since, MIN_EVENTS))
         stocks = [r["e"] for r in cur.fetchall()]
         # Topic narratives, two passes so no story ever loses a card:
-        #  1. fine `topic`s that cleared the gate -> their own specific card
+        #  1. fine `topic`s that cleared the gate -> their own specific card, after
+        #     embedding-snap merges near-duplicate spellings into one story (the
+        #     gate applies to the MERGED count, so a story fragmented into sub-gate
+        #     variants can still earn its card)
         #  2. category catch-all -> every OTHER event (null topic, or a topic still
         #     below the gate) rolled up by coarse category. This keeps a broad card
         #     alive for the long tail while specific stories split off as they earn it.
@@ -283,16 +317,36 @@ def build_narratives(synthesize=True):
         cur.execute(
             "SELECT topic e, COUNT(*) n FROM news_events "
             "WHERE timestamp >= ? AND topic IS NOT NULL AND category IN (%s) "
-            "GROUP BY topic HAVING n >= ?" % cat_ph,
-            (since, *TOPIC_CATEGORIES, MIN_EVENTS))
-        fine_topics = [r["e"] for r in cur.fetchall()]
+            "GROUP BY topic" % cat_ph,
+            (since, *TOPIC_CATEGORIES))
+        topic_counts = {r["e"]: r["n"] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT topic, embedding FROM news_events "
+            "WHERE timestamp >= ? AND topic IS NOT NULL AND embedding IS NOT NULL "
+            "AND category IN (%s)" % cat_ph,
+            (since, *TOPIC_CATEGORIES))
+        topic_vecs = {}
+        for r in cur.fetchall():
+            try:
+                topic_vecs.setdefault(r["topic"], []).append(json.loads(r["embedding"]))
+            except (ValueError, TypeError):
+                pass
+        snapped = _snap_topics(topic_counts, {t: _centroid(v) for t, v in topic_vecs.items()})
+        topic_aliases = {}
+        for alias, canon in snapped.items():
+            topic_aliases.setdefault(canon, []).append(alias)
+        fine_topics = [
+            t for t, n in topic_counts.items() if t not in snapped
+            and n + sum(topic_counts[a] for a in topic_aliases.get(t, ())) >= MIN_EVENTS]
+        # events claimed by a fine card = the canonical topic AND its aliases
+        claimed = [t for c in fine_topics for t in (c, *topic_aliases.get(c, ()))]
 
         catch_sql = ("SELECT category e, COUNT(*) n FROM news_events "
                      "WHERE timestamp >= ? AND category IN (%s) " % cat_ph)
         catch_params = [since, *TOPIC_CATEGORIES]
-        if fine_topics:
-            catch_sql += "AND (topic IS NULL OR topic NOT IN (%s)) " % ",".join("?" * len(fine_topics))
-            catch_params.extend(fine_topics)
+        if claimed:
+            catch_sql += "AND (topic IS NULL OR topic NOT IN (%s)) " % ",".join("?" * len(claimed))
+            catch_params.extend(claimed)
         catch_sql += "GROUP BY category HAVING n >= ?"
         catch_params.append(MIN_EVENTS)
         cur.execute(catch_sql, catch_params)
@@ -301,12 +355,16 @@ def build_narratives(synthesize=True):
         for etype, col, ents, excl in (
                 ("stock", "related_ticker", stocks, None),
                 ("topic", "topic", fine_topics, None),
-                ("topic", "category", catch_cats, fine_topics or None)):
+                ("topic", "category", catch_cats, claimed or None)):
             for ent in ents:
-                rows = _rows_for(cur, col, ent, since, exclude_topics=excl)
+                names = [ent, *topic_aliases.get(ent, ())] if col == "topic" else ent
+                rows = _rows_for(cur, col, names, since, exclude_topics=excl)
                 if len(rows) < MIN_EVENTS:
                     continue
                 card = _card(etype, ent, rows)
+                aliases = topic_aliases.get(ent, []) if col == "topic" else []
+                if aliases:
+                    card["aliases"] = aliases
                 centroid = _centroid(_event_vectors(rows))
                 stored = cur.execute(
                     "SELECT * FROM narratives WHERE entity_type=? AND entity=?",
@@ -318,13 +376,15 @@ def build_narratives(synthesize=True):
                     except (ValueError, TypeError):
                         pass
                 cur.execute(
-                    "INSERT INTO narratives(entity_type,entity,narrative_json,event_count,last_seen,updated_at,centroid)"
-                    " VALUES (?,?,?,?,?,?,?)"
+                    "INSERT INTO narratives(entity_type,entity,narrative_json,event_count,last_seen,updated_at,centroid,aliases)"
+                    " VALUES (?,?,?,?,?,?,?,?)"
                     " ON CONFLICT(entity_type,entity) DO UPDATE SET narrative_json=excluded.narrative_json,"
                     " event_count=excluded.event_count, last_seen=excluded.last_seen,"
-                    " updated_at=excluded.updated_at, centroid=excluded.centroid",
+                    " updated_at=excluded.updated_at, centroid=excluded.centroid,"
+                    " aliases=excluded.aliases",
                     (etype, ent, json.dumps(card), card["event_count"], card["last_seen"],
-                     now.isoformat(), json.dumps(centroid) if centroid else None))
+                     now.isoformat(), json.dumps(centroid) if centroid else None,
+                     json.dumps(aliases) if aliases else None))
                 built.append((etype, ent, card["event_count"]))
 
                 if synthesize:
@@ -333,6 +393,13 @@ def build_narratives(synthesize=True):
                         # priority: drift magnitude, then activity
                         candidates.append(((drift or 0.0, card["event_count"]),
                                            etype, ent, card, reason))
+
+        # a topic that just became an alias may carry its own card from an earlier
+        # build — drop it so the merged canonical card is the story's ONE card
+        if snapped:
+            cur.execute(
+                "DELETE FROM narratives WHERE entity_type='topic' AND entity IN (%s)"
+                % ",".join("?" * len(snapped)), list(snapped))
         conn.commit()
 
         # synthesis pass — budget-capped, highest-priority first

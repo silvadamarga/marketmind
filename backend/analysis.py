@@ -6,14 +6,20 @@ from google.genai import types
 from config import GEMINI_API_KEY
 from prompts import (GEMINI_ANALYSIS_PROMPT, DAILY_REPORT_PROMPT,
                      NARRATIVE_SYNTHESIS_PROMPT, FORGE_INSPIRATION_PROMPT)
+from usage import log_usage
 
 # Stamped into every analysis for provenance. History:
 #   gemini 2.x (unstamped)            ... 2026-04-19
 #   FAILED outage                     2026-04-20 .. 2026-05-03
 #   gemini 3.5, default thinking      2026-05-04 .. (unstamped)
-#   thinking_budget=0                 from this stamp — verified on 20 events:
+#   thinking_budget=0                 2026-06-10 — verified on 20 events:
 #   sentiment 20/20, category 18/20, impact +/-2 agreement, -83% output tokens
-ANALYSIS_LLM_CONFIG = "gemini-flash-latest/think0/2026-06-10"
+#   (prose fields headline/key_takeaway dropped 2026-07-02, tag unbumped)
+#   flash-lite                        from this stamp — pinned model id, not the
+#   -latest alias, so a Google hot-swap can't silently change price or quality;
+#   if Google retires it, calls FAIL loudly and daily_health FAILED% catches it.
+ANALYSIS_MODEL = "gemini-3.1-flash-lite"
+ANALYSIS_LLM_CONFIG = "gemini-3.1-flash-lite/think0/2026-07-04"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -55,7 +61,8 @@ def get_gemini_analysis(title, body, source_app):
     prompt = GEMINI_ANALYSIS_PROMPT.format(title=title, body=body)
     try:
         response = client.models.generate_content(
-            model="gemini-flash-latest", contents=prompt, config=ANALYSIS_CONFIG)
+            model=ANALYSIS_MODEL, contents=prompt, config=ANALYSIS_CONFIG)
+        log_usage("analysis", response.usage_metadata, model=ANALYSIS_MODEL)  # highest-volume call
         data = json.loads(clean_json_string(response.text))
         data["llm_config"] = ANALYSIS_LLM_CONFIG
         return data, response.text
@@ -75,6 +82,7 @@ def generate_narrative_synthesis(entity, events_text):
             model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
         um = response.usage_metadata
         # thinking is on (REPORT_CONFIG) — thoughts tokens are billed; log to monitor cost
+        log_usage("synthesis", um)
         print(f"🧠 synth {entity}: in {um.prompt_token_count} out {um.candidates_token_count} "
               f"think {getattr(um, 'thoughts_token_count', None)}")
         return json.loads(clean_json_string(response.text))
@@ -96,6 +104,7 @@ def generate_forge_inspiration(brief_text):
             response = client.models.generate_content(
                 model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
             um = response.usage_metadata
+            log_usage("inspiration", um)
             print(f"💡 inspiration: in {um.prompt_token_count} out {um.candidates_token_count} "
                   f"think {getattr(um, 'thoughts_token_count', None)}")
             return json.loads(clean_json_string(response.text))
@@ -158,6 +167,7 @@ def generate_daily_report(logs):
         try:
             response = client.models.generate_content(
                 model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
+            log_usage("daily_report", response.usage_metadata)
             raw_text = response.text
             cleaned_text = clean_json_string(raw_text)
             data = json.loads(cleaned_text)

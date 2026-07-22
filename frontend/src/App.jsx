@@ -9,7 +9,7 @@ import WeeklyAnalysis from './components/WeeklyAnalysis';
 import DailyAnalysis from './components/DailyAnalysis';
 import Inspiration from './components/Inspiration';
 import Narratives from './components/Narratives';
-import RegimeBanner from './components/RegimeBanner';
+import { SECTOR_ETFS, BENCHMARK } from './utils/constants';
 
 const API_BASE = "";
 
@@ -33,14 +33,13 @@ export default function MarketMindDashboard() {
   const [selectedSession, setSelectedSession] = useState("ALL");
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [scanning, setScanning] = useState(false);
   const [lastConnection, setLastConnection] = useState("Connecting...");
 
   // Layout
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileConfigOpen, setMobileConfigOpen] = useState(false);
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
+  const [leftOpen, setLeftOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
 
   // Debounced Search
   useEffect(() => {
@@ -139,11 +138,6 @@ export default function MarketMindDashboard() {
     return () => clearInterval(interval);
   }, []); // Empty dependency to run once on mount
 
-  const handleScan = () => {
-    setScanning(true);
-    setTimeout(() => { fetchData(); setScanning(false); }, 1000);
-  };
-
   const handleExport = () => {
     window.location.href = `${API_BASE}/api/export`;
   };
@@ -178,8 +172,18 @@ export default function MarketMindDashboard() {
 
   const marqueeDuration = Math.max(60, signals.length * 5);
 
+  // SPY change is the benchmark sectors are read against.
+  const spyChange = signals.find(s => s.ticker === BENCHMARK)?.daily_change ?? 0;
+
+  // Sort leaders -> laggards so the tape flows strong -> weak even while
+  // scrolling. Sectors rank by relative strength vs SPY; the rest by absolute.
+  const leadKey = (s) => (SECTOR_ETFS.has(s.ticker)
+    ? (s.daily_change ?? 0) - spyChange
+    : (s.daily_change ?? 0));
+  const sortedSignals = [...signals].sort((a, b) => leadKey(b) - leadKey(a));
+
   // REPEAT 4x to ensure smooth loop even on 4K/Ultrawide screens
-  const marqueeSignals = [...signals, ...signals, ...signals, ...signals];
+  const marqueeSignals = [...sortedSignals, ...sortedSignals, ...sortedSignals, ...sortedSignals];
 
   return (
     <div className="flex h-screen w-full bg-[#0B0F19] text-slate-200 font-sans overflow-hidden text-base">
@@ -255,10 +259,8 @@ export default function MarketMindDashboard() {
           signals={signals}
           marqueeDuration={marqueeDuration}
           marqueeSignals={marqueeSignals}
+          spyChange={spyChange}
         />
-
-        {/* Market-regime state (VIX/deployment posture — the real signal) */}
-        <RegimeBanner />
 
         {/* Content Body */}
         {activeTab === 'guide' ? (
@@ -277,8 +279,6 @@ export default function MarketMindDashboard() {
               setActiveTab={setActiveTab}
               searchTerm={searchTerm}
               setSearchTerm={setSearchTerm}
-              handleScan={handleScan}
-              scanning={scanning}
               filteredUpdates={filteredUpdates}
               signals={signals}
               loadMore={loadMore}

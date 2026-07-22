@@ -15,6 +15,12 @@ const formatTimeAgo = (dateString) => {
     return `${days}d ago`;
 };
 
+// snake_case topic/tag -> "Title Case Words". Empty string in -> null.
+const humanize = (s) => {
+    if (!s) return null;
+    return s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+};
+
 
 const FeedCard = (props) => {
     const { update } = props;
@@ -56,15 +62,30 @@ const FeedCard = (props) => {
         }
     };
 
-    // Impact styling: a colored LEFT accent bar = impact tier (scannable on mobile),
-    // with a faint surface tint for the loud tiers. The rest of the card stays calm.
-    const impactAccent = {
-        CRITICAL: "border-l-red-500 bg-red-950/10",
-        HIGH: "border-l-amber-500 bg-amber-950/[0.07]",
-        MEDIUM: "border-l-slate-600",
-        LOW: "border-l-slate-700",
-    };
-    const cardStyle = impactAccent[update.impact] || impactAccent.LOW;
+    // Left SPINE: a uniform 3px rail flush to the card's left edge — same width on
+    // every tier so the rail (and the text beside it) line up straight down the feed.
+    // Colour reads the story DIRECTION by default (bull/neutral/bear from the attached
+    // narrative); the loud priority tiers keep their impact colour + faint tint so
+    // criticals still jump out of the tape.
+    const dirSpine = narrative && narrative.direction === 'bull' ? 'border-l-emerald-500'
+        : narrative && narrative.direction === 'bear' ? 'border-l-rose-500'
+        : 'border-l-slate-600';
+    const spine = update.impact === 'CRITICAL' ? 'border-l-red-500 bg-red-950/20'
+        : update.impact === 'HIGH' ? 'border-l-amber-500 bg-amber-950/10'
+        : dirSpine;
+    const cardStyle = `border-l-[3px] ${spine}`;
+
+    // Factual metadata Gemini attached to the event (direction/sentiment already
+    // stripped server-side). These enrich the tape without implying a trade call.
+    const fa = update.full_analysis || {};
+    // Ticker chip pinned left of the headline — the one datum that makes this a
+    // trading tape and not a generic news feed. tickers[] from the analysis is the
+    // reliable source; related_ticker is a legacy fallback.
+    const ticker = (fa.tickers && fa.tickers[0]) || update.related_ticker || null;
+    const category = fa.category && fa.category !== 'OTHER' ? fa.category : null;
+    const topicWords = humanize(fa.topic);
+    const mlTags = (fa.ml_tags || []).slice(0, 6);
+    const { vix, rsi, rvol, session } = update.ml_context || {};
     const priorityColor = update.relevanceScore >= 8 ? 'bg-red-500 text-red-300'
         : update.relevanceScore >= 7 ? 'bg-amber-500 text-amber-300'
         : 'bg-slate-600 text-slate-400';
@@ -148,49 +169,71 @@ const FeedCard = (props) => {
     return (
         <div
             onClick={handleToggle}
-            className={`border border-slate-800/50 border-l-[3px] rounded-md transition-colors hover:bg-slate-800/20 cursor-pointer ${cardStyle} ${isNoise ? 'opacity-50' : ''} px-3.5 py-2.5`}
+            className={`group rounded-r-lg transition-colors duration-150 hover:bg-slate-800/25 cursor-pointer ${cardStyle} ${isNoise ? 'opacity-50' : ''} pl-3.5 pr-3.5 py-2.5`}
         >
-            {/* GLANCE: headline + search (top-right) */}
-            <div className="flex items-start gap-3">
-                <h3 className="flex-1 min-w-0 leading-snug text-[15px] text-slate-100">
-                    {update.title || update.headline}
-                </h3>
-                <button
-                    onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/search?q=${encodeURIComponent(update.title || update.headline)}`, '_blank'); }}
-                    className="shrink-0 text-slate-500 hover:text-slate-200 transition-colors pt-0.5"
-                    title="Search"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                </button>
+            {/* META LINE — plain-text identity (ticker · category) left, time right.
+                No chips: the headline carries the weight. */}
+            <div className="flex items-baseline gap-2 text-[10px] font-mono tracking-wide">
+                {ticker && (
+                    <span className="shrink-0 font-semibold text-slate-300">{ticker}</span>
+                )}
+                {category && (
+                    <span className="shrink-0 uppercase tracking-wider text-slate-500">{category}</span>
+                )}
+                {isHighImpact && (update.novelty_score || 0) >= 8 && (
+                    <span className="shrink-0 font-semibold uppercase tracking-wider text-amber-400/90">NEW</span>
+                )}
+                <span className="ml-auto shrink-0 flex items-center gap-1.5 tabular-nums text-slate-500">
+                    {narrative && narrative.direction && (
+                        <span title={`story ${narrative.direction}`}
+                            className={`w-1.5 h-1.5 rounded-full ${narrative.direction === 'bull' ? 'bg-emerald-500'
+                                : narrative.direction === 'bear' ? 'bg-rose-500' : 'bg-slate-500'}`} />
+                    )}
+                    {formatTimeAgo(update.date)}
+                </span>
             </div>
 
-            {/* Footer: story / similar (left) · bull-bear dot + time (bottom-right) */}
-                <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-x-4">
-                        {narrative && (
-                            <button onClick={toggleStory}
-                                className="flex items-center gap-1 text-[11px] font-medium text-indigo-300/90 hover:text-indigo-200 transition-colors">
-                                <BookOpen size={12} /> Story · {narrative.label}
-                                {narrative.has_synthesis && <Sparkles size={10} className="text-indigo-400" />}
-                                {storyOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                            </button>
-                        )}
-                        {siblings.length > 0 && (
-                            <button onClick={() => setStackOpen(!stackOpen)}
-                                className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors">
-                                <Layers size={12} /> +{siblings.length} similar
-                                {stackOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                            </button>
-                        )}
-                        <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[11px] text-slate-500">
-                            {narrative && narrative.direction && (
-                                <span title={`story ${narrative.direction}`}
-                                    className={`w-2 h-2 rounded-full ${narrative.direction === 'bull' ? 'bg-emerald-500'
-                                        : narrative.direction === 'bear' ? 'bg-red-500' : 'bg-slate-500'}`} />
-                            )}
-                            {formatTimeAgo(update.date)}
-                        </span>
-                    </div>
+            {/* HEADLINE — the focus. Left-aligned, tight, prominent. */}
+            <h3 className="mt-1 text-[15px] font-semibold leading-snug tracking-tight text-slate-50">
+                {update.title || update.headline}
+            </h3>
+            {(topicWords || (update.source && update.source !== 'Unknown')) && (
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+                    {topicWords && <span className="text-slate-400">{topicWords}</span>}
+                    {topicWords && update.source && update.source !== 'Unknown' && (
+                        <span className="text-slate-700">•</span>
+                    )}
+                    {update.source && update.source !== 'Unknown' && <span>{update.source}</span>}
+                </div>
+            )}
+
+            {/* ACTIONS — minimal inline text links, no border, no button chrome. */}
+            <div onClick={(e) => e.stopPropagation()}>
+                <div className="mt-1.5 flex items-center gap-4">
+                    {narrative && (
+                        <button onClick={toggleStory}
+                            className="flex items-center gap-1 text-[11px] text-indigo-300/90 hover:text-indigo-200 transition-colors">
+                            <BookOpen size={11} /> Story · {narrative.label}
+                            {narrative.has_synthesis && <Sparkles size={9} className="text-indigo-400" />}
+                            {storyOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                        </button>
+                    )}
+                    {siblings.length > 0 && (
+                        <button onClick={() => setStackOpen(!stackOpen)}
+                            className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors">
+                            <Layers size={11} /> +{siblings.length} similar
+                            {stackOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                        </button>
+                    )}
+                    <button
+                        onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/search?q=${encodeURIComponent(update.title || update.headline)}`, '_blank'); }}
+                        className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-200 transition-colors"
+                        title="Search the web for this headline"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                        Search
+                    </button>
+                </div>
 
                     {storyOpen && narrative && storyData && (() => {
                         const arc = storyData.synthesis && storyData.synthesis.arc;
@@ -221,18 +264,45 @@ const FeedCard = (props) => {
 
             {/* DETAILS on tap — source, thesis, scores, search */}
             {isExpanded && (
-                <div className="mt-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="mt-3 pt-3 border-t border-slate-800 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
                     {(update.headline || update.source) && (
                         <p className="text-[11px] text-slate-500">via {update.headline || update.source}</p>
                     )}
                     {update.thesis && (
                         <p className="text-slate-300 text-sm italic border-l-2 border-indigo-500/50 pl-3">"{update.thesis}"</p>
                     )}
+
+                    {/* Tags: the concept labels Gemini attached — what this event IS about */}
+                    {mlTags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                            {mlTags.map((t, i) => (
+                                <span key={i} className="font-mono text-[10px] text-slate-300 bg-slate-800/70 border border-slate-700/50 px-1.5 py-0.5 rounded">
+                                    #{t}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Market context at the time of the event — regime the headline landed in */}
+                    {(vix || rsi || rvol || session) && (
+                        <div className="grid grid-cols-4 gap-2">
+                            {[['VIX', vix], ['RSI', rsi], ['RVOL', rvol ? `${rvol}x` : null], ['SESSION', session]]
+                                .filter(([, v]) => v)
+                                .map(([label, v]) => (
+                                    <div key={label} className="bg-[#0c1120] border border-slate-800 rounded px-2 py-1.5">
+                                        <div className="text-[9px] uppercase tracking-wider text-slate-600 leading-none mb-1">{label}</div>
+                                        <div className="font-mono text-[12px] text-slate-300 leading-none tabular-nums truncate">{v}</div>
+                                    </div>
+                                ))}
+                        </div>
+                    )}
+
                     <div className="flex items-center gap-3">
                         <span className="text-[11px] text-slate-500 flex items-center gap-3">
-                            <span>P{update.relevanceScore ?? '-'}</span>
-                            <span className="text-purple-400/80">N{update.novelty_score ?? '-'}</span>
-                            {confidence ? <span className="text-blue-400/80">C{confidence}</span> : null}
+                            <span title="Priority">P{update.relevanceScore ?? '-'}</span>
+                            <span className="text-purple-400/80" title="Novelty">N{update.novelty_score ?? '-'}</span>
+                            {confidence ? <span className="text-blue-400/80" title="Confidence">C{confidence}</span> : null}
+                            <span className="text-slate-600" title="Impact tier">{update.impact}</span>
                         </span>
                     </div>
                 </div>

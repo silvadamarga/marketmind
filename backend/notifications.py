@@ -1,7 +1,7 @@
 import requests
 from config import DISCORD_WEBHOOK_URL
 
-def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=None):
+def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=None, trader=None, decide=None):
     color_map = {"BULLISH": 0x00FF00, "BEARISH": 0xFF0000, "NEUTRAL": 0x3498DB}
     color = color_map.get(analysis.get("sentiment_label"), 0x95A5A6)
 
@@ -17,7 +17,7 @@ def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=N
             {"name": "Category", "value": analysis.get("category", "N/A"), "inline": True},
             {"name": "Confidence", "value": f"{analysis.get('confidence')}/10", "inline": True}
         ],
-        "footer": {"text": "Market Mind AI"}
+        "footer": {"text": f"Market Mind AI · {source_app}" if source_app else "Market Mind AI"}
     }
     if ml_score:
         embed["fields"].append({
@@ -39,9 +39,41 @@ def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=N
             "value": " | ".join(bits),
             "inline": True
         })
+    if decide:
+        # G5 decide pipe. Annotation only — the forge's blended conviction and
+        # the governor's verdict for this name, so an alert reads against the
+        # same shortlist the human already has.
+        conv = decide.get("conviction")
+        bits = [f"conv {conv:.2f}" if isinstance(conv, (int, float)) else "conv ?"]
+        if decide.get("position"):
+            bits.append(f"#{decide['position']}/{decide.get('n', '?')}")
+        if decide.get("actionable"):
+            size, stop = decide.get("size_eur"), decide.get("stop_price")
+            if size:
+                bits.append(f"€{size:,.0f} stop {stop}")
+        elif decide.get("block"):
+            bits.append(f"⛔ {decide['block']}")
+        embed["fields"].append({
+            "name": f"Forge decide ({decide.get('as_of', '?')})",
+            "value": " | ".join(bits),
+            "inline": True
+        })
+    if trader:
+        # Trader-call pipe (V2). Annotation only — the morning's call for this
+        # name, so the human connects the alert to what they were told pre-open.
+        conf = trader.get("confidence")
+        conf_txt = f" {conf:.2f}" if isinstance(conf, (int, float)) else ""
+        embed["fields"].append({
+            "name": "Trader call",
+            "value": f"{trader.get('call')}{conf_txt} ({trader.get('as_of')})",
+            "inline": True
+        })
+    # Return whether the alert actually reached Discord — the V3 alert ledger
+    # stamps alerted_at only on a real send (send-then-mark).
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind"})
-    except: pass
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed], "username": "Market Mind"})
+        return resp.ok
+    except: return False
 
 def send_posture_alert(old_label, new_label, posture):
     """News-volatility regime change (shadow / decision-support — not a trade

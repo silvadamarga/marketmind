@@ -33,6 +33,24 @@ Two kinds:
   ML/posture/filters — untouched by this split. (Gemini is told to return an empty
   `topic` for one-off / non-market news so noise falls straight into the catch-all.)
 
+  **Embedding-snap (1C, shipped 2026-07-17).** Gemini fragments one story across
+  spelling variants (`us_iran_relations` / `us_iran_tensions` /
+  `middle_east_tensions`); prompt-side "reuse the exact string" wasn't enough.
+  Before gating, `_snap_topics` aliases a smaller topic onto a bigger one when
+  their window-event centroids sit within `TOPIC_SNAP_THETA (0.12)` cosine
+  distance, biggest-first. The gate then applies to the **merged** count, so a
+  story fragmented into sub-gate variants can still earn a card (first live
+  build: `us_inflation_trends` 28 events from four 5–9-event fragments). Aliases
+  are stored on the card + `narratives.aliases` column (the headline-impact pill
+  resolves aliased spellings to the canonical centroid); a topic that becomes an
+  alias has its old card deleted. Snap is recomputed from scratch every build —
+  a wrong snap is never sticky. Calibration (2026-07-17, 44 topic centroids):
+  true duplicate pairs ≤ 0.115, closest genuinely distinct pair 0.128
+  (`fed_rate_path` vs `us_inflation_trends`) — hence 0.12. Do NOT reuse
+  `HEADLINE_NUDGE (0.24)` here: event-vs-centroid and centroid-vs-centroid
+  distances live on different scales (0.24 on this basis would merge Fed policy
+  into inflation and ECB into Fed).
+
 ## Pipeline
 
 ### 1. Per-event extraction (raw material)
@@ -126,4 +144,5 @@ fires on movement, not noise.
 | `SYNTH_STALE_DAYS` | 5 | still active + this old → refresh |
 | `DRIFT_THETA` | 0.18 | centroid cosine shift → story changed |
 | `HEADLINE_SHIFT` / `HEADLINE_NUDGE` | 0.30 / 0.24 | headline-vs-centroid pill tiers |
+| `TOPIC_SNAP_THETA` | 0.12 | topic-centroid dist under which near-dup topics merge |
 | `MAX_SYNTH_PER_BUILD` | 5 | Gemini call cap per build |

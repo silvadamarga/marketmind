@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Zap, Filter, CheckCircle2 } from 'lucide-react';
+import { Search, Filter, CheckCircle2 } from 'lucide-react';
 import FeedCard from './FeedCard';
 
 // Stack near-duplicate headlines (same story from many sources / reworded repeats)
@@ -47,7 +47,7 @@ const groupSimilar = (items) => {
     return groups;
 };
 
-export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan, scanning, filteredUpdates, signals, loadMore, hasMore, loadingMore, setActiveTab }) {
+export default function Feed({ activeTab, searchTerm, setSearchTerm, filteredUpdates, signals, loadMore, hasMore, loadingMore, setActiveTab }) {
     // Narratives are embedded inline on the news cards (no separate strip): index
     // the light cards by entity so a FeedCard can find its story by ticker/category tag.
     const [narrativeIndex, setNarrativeIndex] = useState({});
@@ -68,7 +68,7 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan,
         <div className="flex-1 overflow-hidden flex min-w-0 relative">
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent min-w-0">
                 {activeTab === 'feed' && (
-                    <div className="max-w-5xl mx-auto space-y-2.5 sm:space-y-3">
+                    <div className="max-w-5xl mx-auto space-y-1 sm:space-y-1.5">
 
                         {/* Search Bar */}
                         <div className="flex items-center space-x-3 mb-4 sm:mb-6">
@@ -80,10 +80,6 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, handleScan,
                                     className="w-full bg-slate-800/50 border border-slate-700 text-slate-200 pl-10 pr-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-slate-600 text-sm"
                                 />
                             </div>
-                            <button onClick={handleScan} disabled={scanning} className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-300 text-sm font-medium flex items-center space-x-2 transition-all">
-                                <Zap size={16} className={scanning ? "text-yellow-400 animate-spin" : "text-yellow-400"} />
-                                <span className="hidden sm:inline">{scanning ? 'Syncing...' : 'Force Sync'}</span>
-                            </button>
                         </div>
 
                         {filteredUpdates.length === 0 ? (
