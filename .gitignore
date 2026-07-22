@@ -42,3 +42,4 @@ posture_state.json
 backend/decide.json
 backend/forge_prep_card.json
 backend/llm_decision.json
+NARRATIVES.md
