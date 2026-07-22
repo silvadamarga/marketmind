@@ -10,9 +10,11 @@ SIGNAL_AUTH_TOKEN = os.getenv("SIGNAL_AUTH_TOKEN", "")
 _MAX_LEN = 4000  # relay caps messages at 4096
 
 
-def _post(embed, username="Market Mind"):
+def _post(embed, username="Market Mind", channel="default"):
     """Render an embed dict to text and send it via the Signal relay.
-    Returns True on a 2xx (send-then-mark callers rely on this)."""
+    channel="low" routes to the low-priority group (relay falls back to the
+    main group when unconfigured). Returns True on a 2xx (send-then-mark
+    callers rely on this)."""
     parts = [f"■ {embed.get('title', username)}"]
     if embed.get("description"):
         parts.append(embed["description"])
@@ -25,7 +27,7 @@ def _post(embed, username="Market Mind"):
     if len(text) > _MAX_LEN:
         text = text[:_MAX_LEN - 2] + " …"
     try:
-        resp = requests.post(SIGNAL_SEND_URL, json={"message": text},
+        resp = requests.post(SIGNAL_SEND_URL, json={"message": text, "channel": channel},
                              headers={"Authorization": SIGNAL_AUTH_TOKEN}, timeout=10)
         return resp.status_code < 300
     except requests.RequestException:
@@ -100,7 +102,7 @@ def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=N
         })
     # Return whether the alert actually reached the channel — the V3 alert
     # ledger stamps alerted_at only on a real send (send-then-mark).
-    return _post(embed)
+    return _post(embed, channel="low")
 
 def send_posture_alert(old_label, new_label, posture):
     """News-volatility regime change (shadow / decision-support — not a trade
@@ -132,7 +134,7 @@ def send_posture_alert(old_label, new_label, posture):
         "fields": fields,
         "footer": {"text": "Market Mind · posture (decision-support)"},
     }
-    _post(embed)
+    _post(embed, channel="low")
 
 
 def send_system_alert(title, message, color=0xFF0000):
