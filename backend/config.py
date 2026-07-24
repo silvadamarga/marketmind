@@ -37,6 +37,18 @@ PUSHBULLET_HEARTBEAT_TIMEOUT = int(os.getenv("PUSHBULLET_HEARTBEAT_TIMEOUT", 300
 # night. Env-overridable if it proves noisy over a weekend.
 PUSHBULLET_MIRROR_STALE_TIMEOUT = int(os.getenv("PUSHBULLET_MIRROR_STALE_TIMEOUT", 4 * 3600)) # Seconds
 
+# Forge notification tap (adb over USB) — the second, account-free news leg.
+# Pushbullet stops silently when the account is dormancy-gated ("Account has not
+# been used for over a month", observed 2026-07-24: 13h dark while the websocket
+# kept sending 'nop'), so the forge taps the phone directly and POSTs here.
+# No token set => the ingest endpoint refuses everything, which is the right
+# default for a box on the public internet.
+NOTIF_INGEST_TOKEN = os.getenv("NOTIF_INGEST_TOKEN")
+# Drop a (source_app, title, body) already seen this recently. Both legs may run
+# at once, and news_events has no unique constraint — a duplicate would mean a
+# duplicate Gemini call, a duplicate Signal card and a poisoned news_score_mean.
+NOTIF_DEDUPE_WINDOW_S = int(os.getenv("NOTIF_DEDUPE_WINDOW_S", 6 * 3600))
+
 VWAP_CHECK_INTERVAL = 900
 VWAP_BANDS = 2.0
 RSI_PERIOD = 14

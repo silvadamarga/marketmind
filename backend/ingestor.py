@@ -18,6 +18,9 @@ from notifications import send_system_alert
 # (observed 2026-07-24: mirrors stopped for 11.5h while nop kept flowing).
 LAST_HEARTBEAT_TIME = time.time()
 LAST_MIRROR_TIME = time.time()
+# Set by main.py's ingest endpoint when the forge's adb tap delivers. Never 0 at
+# boot, or a box that has only ever run Pushbullet would alert on startup.
+LAST_INGEST_TIME = time.time()
 HEARTBEAT_LOCK = threading.Lock()
 
 # Configure Logging
@@ -48,6 +51,20 @@ def _mark_mirror():
     """Record a frame that actually carried phone-sourced news."""
     global LAST_MIRROR_TIME
     with HEARTBEAT_LOCK:
+        LAST_MIRROR_TIME = time.time()
+
+
+def mark_ingest():
+    """Record news arriving via the forge's adb tap (main.py's ingest endpoint).
+
+    It feeds LAST_MIRROR_TIME too, deliberately: that clock's job is "is any
+    phone-sourced news still arriving", and after 2026-07-24 there are two legs
+    that can answer yes. LAST_INGEST_TIME is kept separately so the alert can
+    say WHICH leg died.
+    """
+    global LAST_INGEST_TIME, LAST_MIRROR_TIME
+    with HEARTBEAT_LOCK:
+        LAST_INGEST_TIME = time.time()
         LAST_MIRROR_TIME = time.time()
 
 def on_message(ws, message):
@@ -143,6 +160,7 @@ def heartbeat_monitor():
         with HEARTBEAT_LOCK:
             last_frame = LAST_HEARTBEAT_TIME
             last_mirror = LAST_MIRROR_TIME
+            last_ingest = LAST_INGEST_TIME
 
         # 1. Stream leg: are we still talking to Pushbullet at all?
         elapsed = now - last_frame
@@ -172,19 +190,23 @@ def heartbeat_monitor():
         if stale > PUSHBULLET_MIRROR_STALE_TIMEOUT and not conn_alert:
             if not mirror_alert:
                 hours = stale / 3600
-                print(f"⚠️ Pushbullet Mirrors Stalled! ({hours:.1f}h)")
+                ingest_h = (now - last_ingest) / 3600
+                print(f"⚠️ News Feed Stalled! ({hours:.1f}h)")
                 send_system_alert(
-                    "⚠️ Pushbullet Mirrors Stalled",
-                    f"No mirrored notification for {hours:.1f}h while the stream is still "
-                    f"up (nop keepalives arriving). The tethered Android has likely stopped "
-                    f"uploading — restart the Pushbullet app on the phone.",
+                    "⚠️ News Feed Stalled",
+                    f"No phone-sourced news for {hours:.1f}h on EITHER leg while the "
+                    f"Pushbullet stream is still up (nop keepalives arriving). "
+                    f"adb tap silent {ingest_h:.1f}h — check the forge is awake and "
+                    f"`scrape notif-tap` is running. Pushbullet also silent — if the "
+                    f"API returns \"Account has not been used for over a month\", sign "
+                    f"in at pushbullet.com to clear the dormancy gate.",
                     color=0xFF0000
                 )
                 mirror_alert = True
         elif stale <= PUSHBULLET_MIRROR_STALE_TIMEOUT and mirror_alert:
-            print("✅ Pushbullet Mirrors Resumed")
+            print("✅ News Feed Resumed")
             send_system_alert(
-                "✅ Pushbullet Mirrors Resumed",
+                "✅ News Feed Resumed",
                 "Phone-sourced notifications are arriving again.",
                 color=0x00FF00
             )

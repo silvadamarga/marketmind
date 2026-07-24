@@ -148,6 +148,13 @@ def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regim
         ml_score=ml_score
     )
     
+    # Replayed history (the forge tap's --backfill) is analysed and stored but
+    # never alerted: firing cards for stories hours old is noise, and
+    # _repeat_direction would not suppress most of them.
+    if not task.get("alert", True):
+        print(f"🔕 Stored without alert (replay): {title[:40]}")
+        return
+
     if impact >= MIN_IMPACT_SCORE:
         # Filter: High Impact OR High Novelty (trailing adaptive thresholds)
         novelty = analysis.get("novelty_score", 0)

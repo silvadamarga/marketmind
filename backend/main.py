@@ -8,7 +8,7 @@ import csv
 import datetime
 import time
 import math
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
@@ -18,6 +18,7 @@ import bot_logic
 import ingestor
 import monitor
 from database import init_db, DB_FILE, get_db_connection, json_safe
+from config import NOTIF_INGEST_TOKEN, NOTIF_DEDUPE_WINDOW_S
 
 # --- LIFECYCLE MANAGER ---
 @asynccontextmanager
@@ -453,6 +454,48 @@ def export_dataset():
             )
     except Exception as e:
         return {"error": str(e)}
+
+@app.post("/api/ingest/notification")
+def ingest_notification(payload: dict, authorization: str = Header(None)):
+    """Second news leg: a phone notification tapped over adb by the forge.
+
+    Puts exactly what ingestor.py's Pushbullet mirror branch puts into the same
+    queue, so nothing downstream can tell the two transports apart. Pushbullet
+    stays live alongside this; NOTIF_DEDUPE_WINDOW_S is what makes running both
+    safe, since news_events has no unique constraint.
+
+    `alert: false` (the forge's --backfill) stores and analyses without firing a
+    Signal card — see bot_logic.handle_logging_and_alerts.
+    """
+    if not NOTIF_INGEST_TOKEN:
+        raise HTTPException(status_code=503, detail="ingest disabled (no token configured)")
+    if authorization != f"Bearer {NOTIF_INGEST_TOKEN}":
+        raise HTTPException(status_code=401, detail="bad token")
+
+    title = (payload.get("title") or "").strip()
+    body = (payload.get("body") or "").strip()
+    source = (payload.get("source") or "Unknown").strip()
+    if not title and not body:
+        raise HTTPException(status_code=400, detail="empty notification")
+
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(seconds=NOTIF_DEDUPE_WINDOW_S)).isoformat()
+    with get_db_connection() as conn:
+        dup = conn.execute(
+            """SELECT 1 FROM news_events
+               WHERE source_app = ? AND title = ? AND body = ? AND timestamp >= ?
+               LIMIT 1""", (source, title, body, cutoff)).fetchone()
+    if dup:
+        return {"status": "duplicate"}
+
+    bot_logic.NEWS_QUEUE.put({
+        "title": title, "body": body, "source": source,
+        "package": payload.get("package"), "icon": None,
+        "alert": bool(payload.get("alert", True)),
+    })
+    ingestor.mark_ingest()
+    return {"status": "queued", "qsize": bot_logic.NEWS_QUEUE.qsize()}
+
 
 @app.get("/health")
 def health_check():
