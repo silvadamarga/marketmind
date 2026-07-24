@@ -28,7 +28,14 @@ ALERT_IMPACT_RATE = 0.041
 ALERT_NOVELTY_RATE = 0.110
 ALERT_WINDOW_DAYS = 30
 ALERT_MIN_ROWS = 300
-PUSHBULLET_HEARTBEAT_TIMEOUT = 60 # Seconds
+# Stream silence before alerting. The server sends 'nop' every ~30s; 300s
+# tolerates a reconnect without crying wolf (the monitor thread was dead until
+# 2026-07-24, so 60s was never exercised against real reconnect behaviour).
+PUSHBULLET_HEARTBEAT_TIMEOUT = int(os.getenv("PUSHBULLET_HEARTBEAT_TIMEOUT", 300)) # Seconds
+# Mirror silence before alerting. Quietest observed hour on the tethered phone
+# was 1 notification, so 4h idle is genuinely abnormal rather than a slow news
+# night. Env-overridable if it proves noisy over a weekend.
+PUSHBULLET_MIRROR_STALE_TIMEOUT = int(os.getenv("PUSHBULLET_MIRROR_STALE_TIMEOUT", 4 * 3600)) # Seconds
 
 VWAP_CHECK_INTERVAL = 900
 VWAP_BANDS = 2.0

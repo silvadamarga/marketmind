@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         # Start background threads for processing and monitoring
         threading.Thread(target=bot_logic.process_news_queue, daemon=True).start()
         threading.Thread(target=ingestor.start_listening, daemon=True).start()
+        threading.Thread(target=ingestor.heartbeat_monitor, daemon=True).start()
         threading.Thread(target=monitor.vwap_monitor_loop, daemon=True).start()
         threading.Thread(target=monitor.macro_monitor_loop, daemon=True).start()
     yield

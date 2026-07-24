@@ -4,12 +4,20 @@ import websocket
 import requests
 import threading
 import logging
-from config import PUSHBULLET_API_KEY, PUSHBULLET_STREAM_URL, PUSHBULLET_API_URL, PUSHBULLET_HEARTBEAT_TIMEOUT
+from config import (PUSHBULLET_API_KEY, PUSHBULLET_STREAM_URL, PUSHBULLET_API_URL,
+                    PUSHBULLET_HEARTBEAT_TIMEOUT, PUSHBULLET_MIRROR_STALE_TIMEOUT)
 import bot_logic
 from notifications import send_system_alert
 
 # Heartbeat State
+# Two clocks, because they fail independently. LAST_HEARTBEAT_TIME sees any
+# frame including the server's 'nop' keepalive, which Pushbullet emits every
+# ~30s whether or not the phone is still connected — so it only proves the
+# VPS<->Pushbullet leg. LAST_MIRROR_TIME sees only frames that carried real
+# phone-sourced news, and is the only thing that can catch a wedged Android
+# (observed 2026-07-24: mirrors stopped for 11.5h while nop kept flowing).
 LAST_HEARTBEAT_TIME = time.time()
+LAST_MIRROR_TIME = time.time()
 HEARTBEAT_LOCK = threading.Lock()
 
 # Configure Logging
@@ -36,6 +44,12 @@ def fetch_latest_push():
         logging.error(f"Error fetching latest push: {e}")
     return None
 
+def _mark_mirror():
+    """Record a frame that actually carried phone-sourced news."""
+    global LAST_MIRROR_TIME
+    with HEARTBEAT_LOCK:
+        LAST_MIRROR_TIME = time.time()
+
 def on_message(ws, message):
     try:
         print(f"📩 Raw Message: {message}")
@@ -59,8 +73,9 @@ def on_message(ws, message):
                         "body": latest.get('body', ''),
                         "source": latest.get("application_name", "Pushbullet"),
                         "package": None,
-                        "icon": None 
+                        "icon": None
                     })
+                    _mark_mirror()
                 else:
                     logging.info(f"Ignored Tickle Push Type: {latest.get('type')}")
 
@@ -82,6 +97,7 @@ def on_message(ws, message):
                     "package": package,
                     "icon": None
                 })
+                _mark_mirror()
                 print(f"📱 Mirror: {app_name} ({package})")
             else:
                 logging.info(f"Ignored Ephemeral Push Type: {push.get('type')}")
@@ -119,31 +135,60 @@ def start_listening():
 
 def heartbeat_monitor():
     print("💓 Heartbeat Monitor Started")
-    alert_sent = False
+    conn_alert = False
+    mirror_alert = False
     while True:
         time.sleep(10)
+        now = time.time()
         with HEARTBEAT_LOCK:
-            last_time = LAST_HEARTBEAT_TIME
-        
-        elapsed = time.time() - last_time
+            last_frame = LAST_HEARTBEAT_TIME
+            last_mirror = LAST_MIRROR_TIME
+
+        # 1. Stream leg: are we still talking to Pushbullet at all?
+        elapsed = now - last_frame
         if elapsed > PUSHBULLET_HEARTBEAT_TIMEOUT:
-            if not alert_sent:
+            if not conn_alert:
                 print(f"⚠️ Pushbullet Heartbeat Lost! ({int(elapsed)}s)")
                 send_system_alert(
-                    "⚠️ Pushbullet Connection Lost", 
+                    "⚠️ Pushbullet Connection Lost",
                     f"No heartbeat received for {int(elapsed)} seconds. Check internet or Pushbullet API.",
                     color=0xFF0000
                 )
-                alert_sent = True
-        else:
-            if alert_sent:
-                print("✅ Pushbullet Connection Restored")
+                conn_alert = True
+        elif conn_alert:
+            print("✅ Pushbullet Connection Restored")
+            send_system_alert(
+                "✅ Pushbullet Connection Restored",
+                "Heartbeat signal recovered.",
+                color=0x00FF00
+            )
+            conn_alert = False
+
+        # 2. Phone leg: the stream can be green while the tethered Android has
+        # stopped mirroring, so this is checked separately. Only alert while
+        # the stream itself is healthy — a dead stream already alerted above
+        # and would otherwise fire both.
+        stale = now - last_mirror
+        if stale > PUSHBULLET_MIRROR_STALE_TIMEOUT and not conn_alert:
+            if not mirror_alert:
+                hours = stale / 3600
+                print(f"⚠️ Pushbullet Mirrors Stalled! ({hours:.1f}h)")
                 send_system_alert(
-                    "✅ Pushbullet Connection Restored", 
-                    "Heartbeat signal recovered.",
-                    color=0x00FF00
+                    "⚠️ Pushbullet Mirrors Stalled",
+                    f"No mirrored notification for {hours:.1f}h while the stream is still "
+                    f"up (nop keepalives arriving). The tethered Android has likely stopped "
+                    f"uploading — restart the Pushbullet app on the phone.",
+                    color=0xFF0000
                 )
-                alert_sent = False
+                mirror_alert = True
+        elif stale <= PUSHBULLET_MIRROR_STALE_TIMEOUT and mirror_alert:
+            print("✅ Pushbullet Mirrors Resumed")
+            send_system_alert(
+                "✅ Pushbullet Mirrors Resumed",
+                "Phone-sourced notifications are arriving again.",
+                color=0x00FF00
+            )
+            mirror_alert = False
 
 if __name__ == "__main__":
     # Start the News Processing Worker
