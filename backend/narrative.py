@@ -402,7 +402,15 @@ def build_narratives(synthesize=True):
                 % ",".join("?" * len(snapped)), list(snapped))
         conn.commit()
 
-        # synthesis pass — budget-capped, highest-priority first
+        # synthesis pass — budget-capped, highest-priority first.
+        # COMMIT PER ENTITY, not once at the end: each Gemini call takes seconds,
+        # so holding the write lock across the loop starved usage.log_usage — it
+        # opens its own connection, hit SQLite's 5s default timeout and dropped
+        # the row (it swallows by design). Measured 2026-07-31: 1 of 5 synthesis
+        # calls reached gemini_usage, so the cost ledger was undercounting this
+        # call type ~5x. Committing between calls also makes each synthesis
+        # durable on its own — a failure mid-loop no longer discards the ones
+        # already paid for.
         synthesized = []
         candidates.sort(key=lambda c: c[0], reverse=True)
         for _, etype, ent, card, reason in candidates[:MAX_SYNTH_PER_BUILD]:
@@ -416,8 +424,8 @@ def build_narratives(synthesize=True):
                 "UPDATE narratives SET narrative_json=?, synthesis_json=?, last_synth=? "
                 "WHERE entity_type=? AND entity=?",
                 (json.dumps(card), json.dumps(syn), now.isoformat(), etype, ent))
+            conn.commit()
             synthesized.append((etype, ent, reason))
-        conn.commit()
 
     return {"built": len(built), "synthesized": len(synthesized),
             "synth_entities": synthesized, "gated_candidates": len(candidates)}
