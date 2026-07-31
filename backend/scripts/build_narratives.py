@@ -17,8 +17,9 @@ MAX_SYNTH_PER_BUILD (5) per run, so this job's ceiling is 5 calls/week (measured
 2026-07-31, 68% of it per-headline `analysis`). Run with --no-synth for a
 zero-token rebuild.
 
-Run from backend/ via cron on the production server, Mondays at 04:15 UTC:
-    15 4 * * 1 cd /path/to/backend && venv/bin/python scripts/build_narratives.py
+Run from backend/ via cron on the production server, Mondays at 04:20 UTC —
+04:15 is taken by the notifier system's own backup, and the two share a disk:
+    20 4 * * 1 cd /path/to/backend && venv/bin/python scripts/build_narratives.py
 Local test: venv/bin/python scripts/build_narratives.py --no-synth
 """
 
