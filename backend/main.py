@@ -464,8 +464,10 @@ def ingest_notification(payload: dict, authorization: str = Header(None)):
     stays live alongside this; NOTIF_DEDUPE_WINDOW_S is what makes running both
     safe, since news_events has no unique constraint.
 
-    `alert: false` (the forge's --backfill) stores and analyses without firing a
-    Signal card — see bot_logic.handle_logging_and_alerts.
+    Nothing here fires a card: events are stored and analysed, and the human
+    reads them in the windowed summary (scripts/news_rollup.py). The forge's
+    `alert: false` (--backfill) flag is accepted and ignored — see
+    bot_logic.handle_logging.
     """
     if not NOTIF_INGEST_TOKEN:
         raise HTTPException(status_code=503, detail="ingest disabled (no token configured)")

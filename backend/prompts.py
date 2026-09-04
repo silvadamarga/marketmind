@@ -119,7 +119,7 @@ FORGE_INSPIRATION_PROMPT = """
 
 DAILY_REPORT_PROMPT = """
     You are a factual market reporter writing a plain-language recap of what
-    happened in markets over the last 24 hours, for a general reader.
+    happened in markets over the last {window_hours} hours, for a general reader.
 
     Your ONLY job is to explain WHAT HAPPENED and WHY IT MATTERS. You do NOT
     predict, you do NOT give a market direction, you do NOT say bullish or bearish,
@@ -145,6 +145,9 @@ DAILY_REPORT_PROMPT = """
 
     GUIDELINES:
     - Focus on SPECIFIC NEWS EVENTS, not abstract vibes. Pick the top 3-5.
+    - Events marked PRIORITY crossed the alert bar the per-item cards used to
+      fire on; prefer them for key_developments, but do not invent importance
+      for one whose facts are thin.
     - Be objective and factual. Past tense for what happened.
     - NEVER include sentiment, a direction call, a price target, a recommendation,
       or a forecast of where anything is headed. If tempted, restate the fact instead.

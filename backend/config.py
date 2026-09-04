@@ -16,6 +16,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "market_mind.db")
 
 # Analysis Config
+# Retired 2026-09-04 with the per-item alert card — kept as the historical
+# floor those cards fired above; nothing reads it now.
 MIN_IMPACT_SCORE = 6
 IMPACT_THRESHOLD_HIGH = 7   # fallback when trailing alert window is too thin
 NOVELTY_THRESHOLD_HIGH = 7  # fallback when trailing alert window is too thin

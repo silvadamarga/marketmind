@@ -33,76 +33,12 @@ def _post(embed, username="Market Mind", channel="default"):
     except requests.RequestException:
         return False
 
-def send_news_alert(analysis, original_title, source_app, ml_score=None, forge=None, trader=None, decide=None):
-    color_map = {"BULLISH": 0x00FF00, "BEARISH": 0xFF0000, "NEUTRAL": 0x3498DB}
-    color = color_map.get(analysis.get("sentiment_label"), 0x95A5A6)
+# send_news_alert (one card per story, low group) lived here until 2026-09-04.
+# It fired 2-7 times a day and the human read none of them: a card per story is
+# the wrong shape for news that is consulted, not reacted to. The windowed
+# summary in scripts/news_rollup.py replaced it and carries the same forge
+# rank / trader-call annotations at summary granularity.
 
-    # Title from the real analysis schema (sentiment_label / tickers / impact_score);
-    # skip empties so we never render "None" for a macro event with no ticker.
-    tickers = analysis.get("tickers") or []
-    head_bits = [b for b in (analysis.get("sentiment_label"), tickers[0] if tickers else None) if b]
-    embed = {
-        "title": f"{' '.join(head_bits)} | {analysis.get('impact_score')}/10".lstrip(),
-        "description": f"**{original_title}**",
-        "color": color,
-        "fields": [
-            {"name": "Category", "value": analysis.get("category", "N/A"), "inline": True},
-            {"name": "Confidence", "value": f"{analysis.get('confidence')}/10", "inline": True}
-        ],
-        "footer": {"text": f"Market Mind AI · {source_app}" if source_app else "Market Mind AI"}
-    }
-    if ml_score:
-        embed["fields"].append({
-            "name": "ML 1d (shadow)",
-            "value": f"P(UP) {ml_score['p_up']:.0%} | score {ml_score['score']:+.2f}",
-            "inline": True
-        })
-    if forge:
-        # Forge fundamental rank snapshot (pipe 2). Annotation only — flag the
-        # snapshot's age so a stale rank isn't read as fresh.
-        stale_tag = {"stale": " ⚠️stale", "very_stale": " ⚠️very stale"}.get(forge["staleness"], "")
-        bits = [f"#{forge['rank']}"]
-        if forge.get("fv_upside") is not None:
-            bits.append(f"FV {forge['fv_upside']:+.0%}")
-        if forge.get("sector"):
-            bits.append(forge["sector"])
-        embed["fields"].append({
-            "name": f"Forge rank ({forge.get('as_of', '?')}{stale_tag})",
-            "value": " | ".join(bits),
-            "inline": True
-        })
-    if decide:
-        # G5 decide pipe. Annotation only — the forge's blended conviction and
-        # the governor's verdict for this name, so an alert reads against the
-        # same shortlist the human already has.
-        conv = decide.get("conviction")
-        bits = [f"conv {conv:.2f}" if isinstance(conv, (int, float)) else "conv ?"]
-        if decide.get("position"):
-            bits.append(f"#{decide['position']}/{decide.get('n', '?')}")
-        if decide.get("actionable"):
-            size, stop = decide.get("size_eur"), decide.get("stop_price")
-            if size:
-                bits.append(f"€{size:,.0f} stop {stop}")
-        elif decide.get("block"):
-            bits.append(f"⛔ {decide['block']}")
-        embed["fields"].append({
-            "name": f"Forge decide ({decide.get('as_of', '?')})",
-            "value": " | ".join(bits),
-            "inline": True
-        })
-    if trader:
-        # Trader-call pipe (V2). Annotation only — the morning's call for this
-        # name, so the human connects the alert to what they were told pre-open.
-        conf = trader.get("confidence")
-        conf_txt = f" {conf:.2f}" if isinstance(conf, (int, float)) else ""
-        embed["fields"].append({
-            "name": "Trader call",
-            "value": f"{trader.get('call')}{conf_txt} ({trader.get('as_of')})",
-            "inline": True
-        })
-    # Return whether the alert actually reached the channel — the V3 alert
-    # ledger stamps alerted_at only on a real send (send-then-mark).
-    return _post(embed, channel="low")
 
 def send_posture_alert(old_label, new_label, posture):
     """News-volatility regime change (shadow / decision-support — not a trade

@@ -152,6 +152,20 @@ def init_db():
                             created_at TEXT
                         )''')
 
+            # Rollup ledger (scripts/news_rollup.py). One row per DELIVERED
+            # windowed news summary — the replacement for the per-item alert
+            # cards retired 2026-09-04. window_end is also the bookkeeping the
+            # next run reads to pick its window, so a missed cron tick (or a
+            # weekend) widens the next window instead of dropping the news.
+            c.execute('''CREATE TABLE IF NOT EXISTS news_rollups (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            window_start TEXT NOT NULL,
+                            window_end TEXT NOT NULL,
+                            n_events INTEGER,
+                            report_json TEXT,
+                            created_at TEXT
+                        )''')
+
             # Gemini spend ledger — one row per generate_content call (usage.py).
             # Lets daily_health.py total the day's cost and alert on a budget breach.
             c.execute('''CREATE TABLE IF NOT EXISTS gemini_usage (

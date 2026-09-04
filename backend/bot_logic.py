@@ -2,15 +2,11 @@ import datetime
 import queue
 import time
 import threading
-from config import (MIN_IMPACT_SCORE, IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH,
+from config import (IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH,
                     ALERT_IMPACT_RATE, ALERT_NOVELTY_RATE, ALERT_WINDOW_DAYS, ALERT_MIN_ROWS)
-from database import log_news_event, mark_alerted, safe_round, get_db_connection
+from database import log_news_event, safe_round, get_db_connection
 from analysis import get_gemini_analysis, get_text_embedding
-from notifications import send_news_alert
 from ml_scorer import score_event
-import forge_decide
-import forge_rank
-import llm_calls
 import monitor
 
 NEWS_QUEUE = queue.Queue()
@@ -20,30 +16,6 @@ NEWS_QUEUE = queue.Queue()
 BLOCKED_SOURCES = ("baha",)
 
 _ALERT_THRESH_CACHE = {"ts": 0.0, "impact": IMPACT_THRESHOLD_HIGH, "novelty": NOVELTY_THRESHOLD_HIGH}
-
-# Direction-change alert gate: once a ticker has alerted, it only re-alerts when
-# its sentiment FLIPS (2026-07-08: 12 USO cards for the same oil story). Keyed on
-# a normalized ticker so alias symbols share one gate. Seen-time refreshes while
-# the story keeps flowing; a story quiet for the TTL re-arms. In-memory on
-# purpose — a restart costs at most one repeat card per ticker.
-ALERT_REPEAT_TTL_S = 24 * 3600
-_TICKER_ALIAS = {"OIL": "USO", "DJI": "DIA", "DJIA": "DIA", "^DJI": "DIA"}
-_LAST_ALERT = {}  # normalized ticker -> [sentiment_label, last_seen_ts]
-
-
-def _repeat_direction(ticker, label):
-    """True when this ticker already alerted with the same sentiment inside the
-    TTL. No-ticker (macro) events never suppress. Records the (ticker, label)
-    either way so callers just gate on the return."""
-    if not ticker:
-        return False
-    key = _TICKER_ALIAS.get(ticker, ticker)
-    now = time.time()
-    prev = _LAST_ALERT.get(key)
-    _LAST_ALERT[key] = [label, now]
-    return (prev is not None and prev[0] == label
-            and now - prev[1] < ALERT_REPEAT_TTL_S)
-
 
 def _rate_threshold(vals, rate, fallback):
     """Integer threshold whose trailing firing share is closest to the design
@@ -56,9 +28,11 @@ def _rate_threshold(vals, rate, fallback):
 
 
 def get_alert_thresholds():
-    """Trailing-window alert thresholds that keep firing at the Gemini-2-era
-    design rates regardless of LLM score inflation (see config). Cached 1h;
-    falls back to the fixed thresholds when the window is too thin."""
+    """Trailing-window thresholds that hold the Gemini-2-era design rates
+    regardless of LLM score inflation (see config). Cached 1h; falls back to the
+    fixed thresholds when the window is too thin. These no longer fire anything:
+    since the per-item cards were retired (2026-09-04) they only mark an event
+    PRIORITY inside scripts/news_rollup.py's summary."""
     now = time.time()
     if now - _ALERT_THRESH_CACHE["ts"] < 3600:
         return _ALERT_THRESH_CACHE["impact"], _ALERT_THRESH_CACHE["novelty"]
@@ -126,8 +100,10 @@ def get_micro_regime(analysis):
                 }
     return micro_regime
 
-def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regime, session, sector_json, source_app, title, ml_score=None):
-    """Handles logging to DB and sending alerts."""
+def handle_logging(task, analysis, full_text, macro_data, micro_regime, session, sector_json, source_app, title, ml_score=None):
+    """Stores the analysed event. Sends nothing: the per-item alert card was
+    retired 2026-09-04 in favour of the windowed summary
+    (scripts/news_rollup.py), which reads these rows."""
     if not analysis:
         return
 
@@ -137,7 +113,7 @@ def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regim
     if impact >= 5: # Threshold for "worth remembering"
         embedding = get_text_embedding(full_text)
 
-    event_id = log_news_event(
+    log_news_event(
         task,
         analysis,
         embedding=embedding,
@@ -148,42 +124,6 @@ def handle_logging_and_alerts(task, analysis, full_text, macro_data, micro_regim
         ml_score=ml_score
     )
     
-    # Replayed history (the forge tap's --backfill) is analysed and stored but
-    # never alerted: firing cards for stories hours old is noise, and
-    # _repeat_direction would not suppress most of them.
-    if not task.get("alert", True):
-        print(f"🔕 Stored without alert (replay): {title[:40]}")
-        return
-
-    if impact >= MIN_IMPACT_SCORE:
-        # Filter: High Impact OR High Novelty (trailing adaptive thresholds)
-        novelty = analysis.get("novelty_score", 0)
-
-        impact_thr, novelty_thr = get_alert_thresholds()
-
-        if impact >= impact_thr or novelty >= novelty_thr:
-            ticker = (analysis.get("ticker") or
-                      (analysis.get("tickers") or [None])[0])
-            label = analysis.get("sentiment_label") or analysis.get("sentiment")
-            if _repeat_direction(ticker, label):
-                print(f"🔇 Skipped repeat direction: {ticker} still {label}")
-            else:
-                # Mirrored pushes carry the channel name in `title` ("Breaking
-                # news", "Investing.com") and the real headline in `body`.
-                headline = (task.get("body") or "").strip()[:300] or title
-                forge = forge_rank.lookup(ticker)
-                trader = llm_calls.lookup(ticker)
-                decide = forge_decide.lookup(ticker)
-                sent = send_news_alert(analysis, headline, source_app,
-                                       ml_score=ml_score, forge=forge,
-                                       trader=trader, decide=decide)
-                # Alert ledger (V3): send-then-mark — only a delivered alert
-                # stamps the row; a failed send leaves NULL, correct.
-                if sent:
-                    mark_alerted(event_id)
-        else:
-            print(f"📉 Skipped Low Impact/Novelty: Impact={impact}, Novelty={novelty} (thr {impact_thr}/{novelty_thr})")
-
 def process_news_queue():
     print("👷 News Worker Thread Started")
     while True:
@@ -234,7 +174,7 @@ def process_news_queue():
                     print(f"🤖 ML score: P(UP)={ml_score['p_up']:.2f} score={ml_score['score']:+.2f}")
 
             # 5. Log and Alert
-            handle_logging_and_alerts(
+            handle_logging(
                 task, analysis, full_text, macro_data, micro_regime,
                 session, sector_json, source_app, title, ml_score=ml_score
             )
