@@ -43,7 +43,7 @@ def cost_usd(model, prompt_tokens, output_tokens, thought_tokens) -> float:
 
 def log_usage(call_type: str, usage_metadata, model: str = ALIAS_MODEL) -> None:
     """Persist one call's token usage + estimated cost. Best-effort, never raises.
-    `call_type` is a coarse bucket: analysis | synthesis | inspiration | daily_report | weekly_report."""
+    `call_type` is a coarse bucket: analysis | synthesis | inspiration | daily_report."""
     try:
         um = usage_metadata
         pt = getattr(um, "prompt_token_count", 0) or 0

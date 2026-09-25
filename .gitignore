@@ -41,4 +41,5 @@ posture_state.json
 backend/decide.json
 backend/forge_prep_card.json
 backend/llm_decision.json
+backend/weekly_recap.json
 NARRATIVES.md

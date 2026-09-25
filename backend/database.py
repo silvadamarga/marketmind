@@ -152,17 +152,6 @@ def init_db():
                             created_at TEXT
                         )''')
 
-            # Weekly recap (site's Weekly page). One row per generation day, built
-            # from the 7 days of priority/novelty events up to created_at.
-            c.execute('''CREATE TABLE IF NOT EXISTS weekly_reports (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            date TEXT UNIQUE,
-                            window_start TEXT,
-                            n_events INTEGER,
-                            report_json TEXT,
-                            created_at TEXT
-                        )''')
-
             # Rollup ledger (scripts/news_rollup.py). One row per DELIVERED
             # windowed news summary — the replacement for the per-item alert
             # cards retired 2026-09-04. window_end is also the bookkeeping the

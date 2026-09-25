@@ -315,81 +315,17 @@ def get_daily_analysis():
     except Exception as e:
         return {"error": str(e)}
 
-WEEKLY_MAX_EVENTS = 60    # prompt size; ~20 cross the bar in a typical week
-
 @app.get("/api/analysis/weekly")
 def get_weekly_analysis():
+    """The forge's Sunday recap (weekly_recap.py) — written by a Claude session
+    over the forge's ledgers and the week's priority/novelty news, pushed here
+    as its public half. Nothing is generated on this box."""
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM weekly_reports ORDER BY date DESC LIMIT 1")
-            row = cursor.fetchone()
-            if row:
-                return {"date": row["date"], "window_start": row["window_start"], "n_events": row["n_events"],
-                        "report": json.loads(row["report_json"]), "created_at": row["created_at"]}
-            return {"message": "No reports found."}
+        import weekly_recap
+        recap = weekly_recap.load()
+        return json_safe(recap) if recap else {"message": "No weekly recap from the forge yet."}
     except Exception as e:
         return {"error": str(e)}
-
-@app.post("/api/analysis/weekly/generate")
-def generate_weekly_analysis_endpoint():
-    """Recap of the last 7 days, fed ONLY the events over the priority/novelty
-    bar (the same flag news_rollup.py marks PRIORITY). One per day."""
-    try:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        today_str = now.date().isoformat()
-        start = now - datetime.timedelta(days=7)
-        impact_thr, novelty_thr = bot_logic.get_alert_thresholds()
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM weekly_reports WHERE date = ?", (today_str,))
-            if cursor.fetchone():
-                return {"status": "exists", "message": "Weekly recap for today already exists."}
-
-            cursor.execute("""
-                SELECT title, body, related_ticker, impact_score, ai_analysis_json, timestamp
-                FROM news_events
-                WHERE timestamp >= ?
-                  AND COALESCE(json_extract(ai_analysis_json,'$.status'),'OK') != 'FAILED'
-                  AND (impact_score >= ? OR CAST(json_extract(ai_analysis_json,'$.novelty_score') AS REAL) >= ?)
-                ORDER BY impact_score DESC NULLS LAST, timestamp DESC
-            """, (start.isoformat(), impact_thr, novelty_thr))
-            rows = cursor.fetchall()
-
-        # Same wire-copy de-dupe as news_rollup.gather: one story, many source apps.
-        logs, seen = [], set()
-        for r in rows:
-            key = " ".join((r["body"] or r["title"] or "").lower().split())
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            logs.append({
-                # `body` is the verbatim headline; `title` is the source app's label.
-                "title": r["body"] or r["title"], "body": r["body"], "ticker": r["related_ticker"],
-                "impact_score": r["impact_score"], "date": (r["timestamp"] or "")[:10],
-                "ai_analysis": json.loads(r["ai_analysis_json"]) if r["ai_analysis_json"] else {},
-            })
-            if len(logs) >= WEEKLY_MAX_EVENTS:
-                break
-
-        if not logs:
-            return {"status": "error", "message": "No priority/novelty events in the last 7 days."}
-
-        from analysis import generate_weekly_report
-        report, _ = generate_weekly_report(logs)
-
-        if report:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO weekly_reports (date, window_start, n_events, report_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                              (today_str, start.isoformat(), len(logs), json.dumps(report), now.isoformat()))
-                conn.commit()
-            return {"status": "success", "date": today_str, "window_start": start.isoformat(),
-                    "n_events": len(logs), "report": report, "created_at": now.isoformat()}
-        return {"status": "error", "message": "Report generation failed"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 @app.get("/api/inspiration")
 def get_forge_inspiration(refresh: bool = Query(False)):
