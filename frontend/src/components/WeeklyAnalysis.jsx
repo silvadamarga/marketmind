@@ -1,150 +1,179 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart, PieChart, TrendingUp, AlertTriangle, Calendar, Activity } from 'lucide-react';
+import { Activity, Zap, Calendar, RefreshCw, Layers, Eye, Tag } from 'lucide-react';
 
-const StatCard = ({ title, value, subtext, icon: Icon, colorClass }) => (
-    <div className="bg-[#131b2e] border border-slate-800 p-5 rounded-xl flex items-start justify-between">
-        <div>
-            <div className="text-slate-400 text-sm font-medium mb-1">{title}</div>
-            <div className="text-3xl font-bold text-white">{value}</div>
-            {subtext && <div className="text-xs text-slate-500 mt-2">{subtext}</div>}
-        </div>
-        <div className={`p-3 rounded-lg ${colorClass} bg-opacity-10`}>
-            <Icon size={24} className={colorClass.replace('bg-', 'text-')} />
-        </div>
-    </div>
-);
-
-const ListCard = ({ title, items, icon: Icon }) => (
-    <div className="bg-[#131b2e] border border-slate-800 p-6 rounded-xl h-full">
-        <div className="flex items-center space-x-3 mb-6">
-            <Icon size={20} className="text-indigo-400" />
-            <h3 className="text-lg font-bold text-slate-200">{title}</h3>
-        </div>
-        <div className="space-y-4">
-            {items.map((item, index) => (
-                <div key={index} className="flex items-center justify-between">
-                    <span className="text-slate-300 font-medium">{item.name}</span>
-                    <span className="text-slate-500 text-sm bg-slate-800 px-2 py-1 rounded-md">{item.count}</span>
-                </div>
-            ))}
-            {items.length === 0 && <div className="text-slate-500 text-sm italic">No data available</div>}
-        </div>
+// Factual recap card — what happened + why it matters. No direction, no forecast.
+const DevelopmentCard = ({ dev }) => (
+    <div className="bg-slate-900 border-l-4 border-indigo-500 rounded-r-xl p-6 mb-4 hover:bg-slate-800/50 transition-colors shadow-sm">
+        <h3 className="text-xl font-bold text-white leading-tight mb-3">{dev.headline}</h3>
+        {dev.what_happened && (
+            <p className="text-slate-200 text-base leading-relaxed mb-3">{dev.what_happened}</p>
+        )}
+        {dev.context && (
+            <p className="text-slate-400 text-sm leading-relaxed border-l-2 border-slate-800 pl-4">
+                {dev.context}
+            </p>
+        )}
     </div>
 );
 
 export default function WeeklyAnalysis() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [generating, setGenerating] = useState(false);
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            const response = await fetch('/api/analysis/weekly');
+            const result = await response.json();
+            if (response.ok && !result.message) {
+                setData(result);
+            } else {
+                setData(null);
+            }
+        } catch (error) {
+            console.error("Failed to fetch weekly analysis:", error);
+            setData(null);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const generateReport = async () => {
+        setGenerating(true);
+        try {
+            const response = await fetch('/api/analysis/weekly/generate', { method: 'POST' });
+            const result = await response.json();
+            if (result.status === 'success') {
+                setData(result);
+            } else if (result.status === 'exists') {
+                alert(result.message);
+            } else {
+                alert(`Generation failed: ${result.message}`);
+            }
+        } catch (error) {
+            console.error("Failed to generate report:", error);
+            alert("Failed to generate report. See console for details.");
+        } finally {
+            setGenerating(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const response = await fetch('/api/analysis/weekly');
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const result = await response.json();
-                setData(result);
-            } catch (error) {
-                console.error("Failed to fetch weekly analysis:", error);
-                setData(null);
-            } finally {
-                setLoading(false);
-            }
-        };
         fetchData();
     }, []);
 
     if (loading) {
         return (
-            <div className="flex-1 flex items-center justify-center text-slate-500">
-                <Activity className="animate-spin mr-2" /> Loading analysis...
+            <div className="flex-1 flex items-center justify-center text-slate-500 bg-slate-950">
+                <div className="flex flex-col items-center">
+                    <Activity className="animate-spin mb-4 text-slate-400" size={24} />
+                    <span className="text-xs font-medium tracking-widest uppercase">Loading Recap</span>
+                </div>
             </div>
         );
     }
 
-    if (!data || !data.sentiment_counts) return (
-        <div className="p-8 text-center text-slate-500">
-            <AlertTriangle className="mx-auto mb-2 text-amber-500" size={32} />
-            <p>Failed to load analysis data.</p>
-            <button onClick={() => window.location.reload()} className="mt-4 text-indigo-400 hover:text-indigo-300 text-sm">Retry</button>
-        </div>
-    );
+    if (!data) {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-500 p-8 bg-slate-950">
+                <div className="text-center max-w-md">
+                    <Zap className="mx-auto mb-6 text-slate-600" size={48} />
+                    <h2 className="text-xl font-bold text-slate-200 mb-3">Weekly Recap Unavailable</h2>
+                    <p className="text-slate-400 mb-8 text-sm leading-relaxed">
+                        Generate a factual recap of the week's priority and novelty headlines.
+                    </p>
+                    <button
+                        onClick={generateReport}
+                        disabled={generating}
+                        className="bg-slate-100 hover:bg-white text-slate-900 px-6 py-3 rounded-lg font-bold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center mx-auto"
+                    >
+                        {generating ? 'Writing...' : 'Generate Recap'}
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
-    const { total_events, sentiment_counts, top_tickers, top_categories, critical_events } = data;
-    const bullishPct = total_events > 0 ? Math.round((sentiment_counts?.BULLISH || 0) / total_events * 100) : 0;
-    const bearishPct = total_events > 0 ? Math.round((sentiment_counts?.BEARISH || 0) / total_events * 100) : 0;
+    const { report, date, window_start, n_events } = data;
+    const developments = report.key_developments || [];
+    const fmt = (d, opts) => new Date(d).toLocaleDateString(undefined, opts);
 
     return (
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-            <div className="max-w-6xl mx-auto space-y-8">
-                
+        <div className="flex-1 overflow-y-auto bg-slate-950 p-6 sm:p-12 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+            <div className="max-w-4xl mx-auto space-y-12 pb-12">
+
                 {/* Header */}
-                <div>
-                    <h1 className="text-3xl font-bold text-white mb-2">Weekly Market Pulse</h1>
-                    <p className="text-slate-400">AI-driven analysis of the past 7 days of market intelligence.</p>
+                <div className="flex justify-between items-start border-b border-slate-800 pb-6">
+                    <div>
+                        <div className="flex items-center space-x-2 text-indigo-400 mb-2">
+                            <Calendar size={14} />
+                            <span className="text-xs font-bold uppercase tracking-widest">
+                                {fmt(window_start, { month: 'short', day: 'numeric' })} – {fmt(date, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                        </div>
+                        <h1 className="text-3xl font-bold text-white tracking-tight">Weekly Recap</h1>
+                        <p className="text-xs text-slate-500 mt-1">The week's {n_events} priority and novelty headlines — facts and context, not a market call.</p>
+                    </div>
+                    <button
+                        onClick={generateReport}
+                        disabled={generating}
+                        className="text-slate-500 hover:text-slate-300 transition-colors"
+                        title="Regenerate"
+                    >
+                        <RefreshCw size={18} className={generating ? 'animate-spin' : ''} />
+                    </button>
                 </div>
 
-                {/* Key Stats Row */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <StatCard 
-                        title="Total Insights" 
-                        value={total_events} 
-                        subtext="Processed events" 
-                        icon={Activity} 
-                        colorClass="text-blue-400" 
-                    />
-                    <StatCard 
-                        title="Bullish Sentiment" 
-                        value={`${bullishPct}%`} 
-                        subtext={`${sentiment_counts.BULLISH} events`} 
-                        icon={TrendingUp} 
-                        colorClass="text-emerald-400" 
-                    />
-                    <StatCard 
-                        title="Bearish Sentiment" 
-                        value={`${bearishPct}%`} 
-                        subtext={`${sentiment_counts.BEARISH} events`} 
-                        icon={TrendingUp} 
-                        colorClass="text-red-400" 
-                    />
-                </div>
+                {/* Summary */}
+                <section>
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Summary</h2>
+                    <p className="text-xl md:text-2xl text-slate-300 leading-relaxed font-light">
+                        {report.summary}
+                    </p>
+                </section>
 
-                {/* Lists Row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <ListCard title="Top Tickers" items={top_tickers} icon={BarChart} />
-                    <ListCard title="Top Categories" items={top_categories} icon={PieChart} />
-                </div>
+                {/* Themes */}
+                {report.themes && report.themes.length > 0 && (
+                    <section>
+                        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center">
+                            <Tag size={16} className="mr-2" /> Themes
+                        </h2>
+                        <div className="flex flex-wrap gap-2">
+                            {report.themes.map((t, i) => (
+                                <span key={i} className="text-xs px-3 py-1 rounded-full border border-slate-700 bg-slate-900 text-slate-300">
+                                    {t}
+                                </span>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
-                {/* Week in Review Section */}
-                <div>
-                    <h2 className="text-xl font-bold text-white mb-4 flex items-center">
-                        <AlertTriangle className="mr-2 text-amber-400" size={20} />
-                        Critical Events Review
+                {/* Key Developments */}
+                <section>
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-6 flex items-center">
+                        <Layers size={16} className="mr-2" /> Key Developments
                     </h2>
                     <div className="space-y-4">
-                        {critical_events.length === 0 ? (
-                            <div className="text-slate-500 italic">No critical events recorded this week.</div>
-                        ) : (
-                            critical_events.map((event) => (
-                                <div key={event.id} className="bg-[#131b2e] border border-slate-800 p-5 rounded-xl hover:border-slate-600 transition-colors">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div className="flex items-center space-x-2">
-                                            <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">{event.source}</span>
-                                            <span className="text-slate-600">•</span>
-                                            <span className="text-xs text-slate-500">{new Date(event.date).toLocaleDateString()}</span>
-                                        </div>
-                                        <div className="flex space-x-1">
-                                            {[...Array(5)].map((_, i) => (
-                                                <div key={i} className={`w-1 h-3 rounded-sm ${i < (event.impact / 2) ? 'bg-red-500' : 'bg-slate-800'}`} />
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <h3 className="text-lg font-bold text-slate-200 mb-2">{event.title}</h3>
-                                    <p className="text-slate-400 text-sm leading-relaxed">{event.summary}</p>
-                                </div>
-                            ))
+                        {developments.map((dev, idx) => (
+                            <DevelopmentCard key={idx} dev={dev} />
+                        ))}
+                        {developments.length === 0 && (
+                            <div className="text-slate-500 text-sm italic">No developments captured.</div>
                         )}
                     </div>
-                </div>
+                </section>
+
+                {/* On the radar — factual scheduled items, not a prediction */}
+                {report.on_the_radar && (
+                    <section className="border-t border-slate-800 pt-8">
+                        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center">
+                            <Eye size={16} className="mr-2" /> On the Radar
+                        </h2>
+                        <p className="text-slate-300 text-base leading-relaxed">{report.on_the_radar}</p>
+                        <p className="text-[11px] text-slate-600 mt-2">Scheduled/known items only — not a forecast of direction.</p>
+                    </section>
+                )}
 
             </div>
         </div>

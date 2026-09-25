@@ -4,7 +4,7 @@ import re
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY
-from prompts import (GEMINI_ANALYSIS_PROMPT, DAILY_REPORT_PROMPT,
+from prompts import (GEMINI_ANALYSIS_PROMPT, DAILY_REPORT_PROMPT, WEEKLY_REPORT_PROMPT,
                      NARRATIVE_SYNTHESIS_PROMPT, FORGE_INSPIRATION_PROMPT)
 from usage import log_usage
 
@@ -115,21 +115,14 @@ def generate_forge_inspiration(brief_text):
             time.sleep(1)
 
 
-def generate_daily_report(logs, window_hours=24):
-    """
-    Generates a market news recap using Gemini based on the provided logs.
-    logs: List of dictionaries containing log data (title, body, impact_score, sentiment, etc.)
-    window_hours: the span the logs cover, so the prose names the real window
-    (the frontend daily report is 24h; scripts/news_rollup.py is shorter).
-    A log with flagged=True is marked PRIORITY in the prompt.
-    """
-    if not logs:
-        return None, "No logs provided for analysis."
-
-    # Prepare data for prompt
+def _events_text(logs):
+    """Numbered event blocks for the recap prompts. A log with flagged=True is
+    marked PRIORITY; a log with a `date` carries it (the weekly recap spans days)."""
     events_list = []
     for i, log in enumerate(logs):
         event_str = f"Event {i+1}{' [PRIORITY]' if log.get('flagged') else ''}:\n"
+        if log.get('date'):
+            event_str += f"Date: {log.get('date')}\n"
         event_str += f"Title: {log.get('title', 'N/A')}\n"
         event_str += f"Summary: {log.get('body', 'N/A')}\n"
         # Sentiment deliberately NOT fed to the recap — it must not anchor on a
@@ -156,27 +149,49 @@ def generate_daily_report(logs, window_hours=24):
         if log.get('market_sector_json'):
              event_str += f"Sector Context: {log.get('market_sector_json')}\n"
 
-
-
         event_str += "---\n"
         events_list.append(event_str)
+    return "".join(events_list)
 
-    events_text = "".join(events_list)
 
-    prompt = DAILY_REPORT_PROMPT.format(events_text=events_text, window_hours=window_hours)
-
+def _run_report(prompt, call_type):
+    """One long-form recap call with retries. Returns (parsed dict, raw text),
+    or (None, error string) after the last attempt fails."""
     retries = 3
     for attempt in range(retries):
         try:
             response = client.models.generate_content(
                 model="gemini-flash-latest", contents=prompt, config=REPORT_CONFIG)
-            log_usage("daily_report", response.usage_metadata)
+            log_usage(call_type, response.usage_metadata)
             raw_text = response.text
             cleaned_text = clean_json_string(raw_text)
             data = json.loads(cleaned_text)
             return data, raw_text
         except Exception as e:
-            print(f"❌ Gemini Daily Analysis Error (Attempt {attempt+1}/{retries}): {e}")
+            print(f"❌ Gemini {call_type} Error (Attempt {attempt+1}/{retries}): {e}")
             if attempt == retries - 1:
                 return None, str(e)
             time.sleep(1) # Wait a bit before retrying
+
+
+def generate_daily_report(logs, window_hours=24):
+    """
+    Generates a market news recap using Gemini based on the provided logs.
+    logs: List of dictionaries containing log data (title, body, impact_score, sentiment, etc.)
+    window_hours: the span the logs cover, so the prose names the real window
+    (scripts/news_rollup.py passes its window).
+    A log with flagged=True is marked PRIORITY in the prompt.
+    """
+    if not logs:
+        return None, "No logs provided for analysis."
+    prompt = DAILY_REPORT_PROMPT.format(events_text=_events_text(logs), window_hours=window_hours)
+    return _run_report(prompt, "daily_report")
+
+
+def generate_weekly_report(logs):
+    """Week-in-review recap for the site's Weekly page. `logs` are the week's
+    priority/novelty events only (main.py selects them), each with a `date`."""
+    if not logs:
+        return None, "No logs provided for analysis."
+    prompt = WEEKLY_REPORT_PROMPT.format(events_text=_events_text(logs))
+    return _run_report(prompt, "weekly_report")
