@@ -120,6 +120,7 @@ def format_news_event(row):
     # Frontend usually expects 'headline' for the big text and 'title' or 'body' for the snippet
     return {
         "id": row_dict.get("id"),
+        "story_id": row_dict.get("story_id"),
         "title": row_dict.get("body", ""), 
         "headline": row_dict.get("title", "No Headline"), 
         "source": row_dict.get("source_app", "Unknown"),

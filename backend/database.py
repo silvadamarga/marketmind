@@ -3,6 +3,7 @@ import datetime
 import math
 import json
 from config import DB_FILE
+import story
 from contextlib import contextmanager
 
 def json_safe(val):
@@ -135,6 +136,15 @@ def init_db():
                 # deploy day forward (ml_score_json precedent).
                 c.execute("ALTER TABLE news_events ADD COLUMN alerted_at TEXT")
             except sqlite3.OperationalError: pass
+            try:
+                # Story ids (story.py): headline vector as float32 bytes, and the
+                # story it joined. NULL story_id = never assigned (pre-backfill
+                # or the embedding failed) -> the feed falls back to word grouping.
+                c.execute("ALTER TABLE news_events ADD COLUMN title_embedding BLOB")
+            except sqlite3.OperationalError: pass
+            try:
+                c.execute("ALTER TABLE news_events ADD COLUMN story_id INTEGER")
+            except sqlite3.OperationalError: pass
 
             # Indexes
             c.execute("CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(event_category)")
@@ -143,6 +153,7 @@ def init_db():
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_ticker_time ON news_events(related_ticker, timestamp DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_category_time ON news_events(category, timestamp DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_news_topic_time ON news_events(topic, timestamp DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_news_time ON news_events(timestamp)")
 
             # 4. Daily Reports
             c.execute('''CREATE TABLE IF NOT EXISTS daily_reports (
@@ -197,7 +208,7 @@ def log_market_data(timestamp, ticker_data):
     except Exception as e:
         print(f"⚠️ Market Data Logging Failed: {e}")
 
-def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micro_regime=None, session_phase=None, sector_json=None, ml_score=None):
+def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micro_regime=None, session_phase=None, sector_json=None, ml_score=None, title_embedding=None):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     # Deep clean input analysis to prevent NaN errors on storage
     analysis = json_safe(analysis)
@@ -246,8 +257,19 @@ def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micr
                        embedding,
                        json.dumps(context_data),
                        json.dumps(json_safe(ml_score)) if ml_score else None))
+            event_id = c.lastrowid
+            if title_embedding is not None:
+                # join the story of the closest recent headline, else start one.
+                # Best-effort: a failure leaves story_id NULL, never loses the row.
+                try:
+                    sid = story.find_story(c, title_embedding, timestamp, category,
+                                           analysis.get("tickers"))
+                    c.execute("UPDATE news_events SET title_embedding = ?, story_id = ? WHERE id = ?",
+                              (title_embedding, sid or event_id, event_id))
+                except Exception as e:
+                    print(f"⚠️ Story assignment failed: {e}")
             conn.commit()
-            return c.lastrowid
+            return event_id
     except Exception as e:
         print(f"⚠️ News Logging Failed: {e}")
         return None

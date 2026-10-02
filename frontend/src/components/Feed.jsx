@@ -4,9 +4,10 @@ import FeedCard from './FeedCard';
 
 // Stack near-duplicate headlines (same story from many sources / reworded repeats)
 // so the glance feed shows one row per story. Greedy single pass over the
-// newest-first list: an item joins the first group with a member it's similar
-// enough to (significant-word Jaccard), recent enough to the group's head, and not
-// about different companies; else it starts a group.
+// newest-first list. The backend's story_id (headline embeddings, backend/story.py)
+// decides when both sides have one; otherwise an item joins the first group with a
+// member it's similar enough to (significant-word Jaccard), recent enough to the
+// group's head, and not about different companies; else it starts a group.
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'to', 'of', 'in', 'on', 'at',
     'by', 'with', 'from', 'as', 'is', 'are', 'be', 'its', 'it', 'this', 'that', 'after',
     'over', 'amid', 'says', 'said', 'new', 'will', 'has', 'have', 'out', 'into', 'than', 'but']);
@@ -51,20 +52,25 @@ const groupSimilar = (items) => {
         for (const g of groups) {
             // within 2 days of the head
             if (Math.abs(new Date(it.date) - new Date(g.primary.date)) >= 2 * 86400000) continue;
-            // both name companies and none in common -> different stories, however
-            // alike the template wording ("X is rising 5% after market open")
-            if (tk.size && g._tk.size && !overlap(tk, g._tk)) continue;
-            // any member, not just the head: a reworded repost can join via the
-            // version it's closest to
-            if (g._ws.some(m => similar(w, m))) {
+            const match = (it.story_id != null && g._sids.size)
+                // embeddings already judged it: same story id or not this group
+                ? g._sids.has(it.story_id)
+                // both name companies and none in common -> different stories,
+                // however alike the template wording ("X is rising 5% after
+                // market open"); else any member, not just the head, so a
+                // reworded repost can join via the version it's closest to
+                : !(tk.size && g._tk.size && !overlap(tk, g._tk)) && g._ws.some(m => similar(w, m));
+            if (match) {
                 g.others.push(it);
                 g._ws.push(w);
                 for (const t of tk) g._tk.add(t);
+                if (it.story_id != null) g._sids.add(it.story_id);
                 placed = true;
                 break;
             }
         }
-        if (!placed) groups.push({ primary: it, others: [], _ws: [w], _tk: tk });
+        if (!placed) groups.push({ primary: it, others: [], _ws: [w], _tk: tk,
+            _sids: new Set(it.story_id != null ? [it.story_id] : []) });
     }
     return groups;
 };

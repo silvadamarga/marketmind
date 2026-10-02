@@ -6,6 +6,7 @@ from config import (IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH,
                     ALERT_IMPACT_RATE, ALERT_NOVELTY_RATE, ALERT_WINDOW_DAYS, ALERT_MIN_ROWS)
 from database import log_news_event, safe_round, get_db_connection
 from analysis import get_gemini_analysis, get_text_embedding
+import story
 from ml_scorer import score_event
 import monitor
 
@@ -112,11 +113,15 @@ def handle_logging(task, analysis, full_text, macro_data, micro_regime, session,
     impact = analysis.get("impact_score", 0)
     if impact >= 5: # Threshold for "worth remembering"
         embedding = get_text_embedding(full_text)
+    # Every row, for story grouping (story.py). The headline is `body`; `title`
+    # is the source name ("Investing.com", "CNBC").
+    title_embedding = story.to_blob(get_text_embedding(task.get("body") or task.get("title")))
 
     log_news_event(
         task,
         analysis,
         embedding=embedding,
+        title_embedding=title_embedding,
         macro_context=macro_data,
         micro_regime=micro_regime,
         session_phase=session,
