@@ -4,8 +4,9 @@ import FeedCard from './FeedCard';
 
 // Stack near-duplicate headlines (same story from many sources / reworded repeats)
 // so the glance feed shows one row per story. Greedy single pass over the
-// newest-first list: an item joins the first group whose head it's similar enough
-// to (significant-word Jaccard) and recent enough to; else it starts a group.
+// newest-first list: an item joins the first group with a member it's similar
+// enough to (significant-word Jaccard), recent enough to the group's head, and not
+// about different companies; else it starts a group.
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'to', 'of', 'in', 'on', 'at',
     'by', 'with', 'from', 'as', 'is', 'are', 'be', 'its', 'it', 'this', 'that', 'after',
     'over', 'amid', 'says', 'said', 'new', 'will', 'has', 'have', 'out', 'into', 'than', 'but']);
@@ -22,28 +23,48 @@ const clusterText = (it) => {
     const tags = (fa.ml_tags || []).join(' ').replace(/_/g, ' ');
     return `${fa.headline || it.title || ''} ${tags}`.trim() || it.headline || '';
 };
+// Company identity, for company news only. Macro/geo stories carry proxy tickers
+// Gemini picks inconsistently (gold as GLD on one repost, XAU/USD on the next), so
+// they get none and never trip the different-companies check below.
+const MACRO_CATS = new Set(['MACRO', 'GEOPOLITICS', 'CENTRAL_BANK']);
+const companyTickers = (it) => {
+    const fa = it.full_analysis || {};
+    return new Set(MACRO_CATS.has(fa.category) ? [] : (fa.tickers || []));
+};
 const overlap = (a, b) => {
     let n = 0;
     for (const w of a) if (b.has(w)) n++;
     return n;
 };
+// same story = several shared key words and decent overlap
+const similar = (a, b) => {
+    const inter = overlap(a, b);
+    const uni = a.size + b.size - inter;
+    return inter >= 2 && uni > 0 && inter / uni >= 0.34;
+};
 const groupSimilar = (items) => {
     const groups = [];
     for (const it of items) {
         const w = sigWords(clusterText(it));
+        const tk = companyTickers(it);
         let placed = false;
         for (const g of groups) {
-            const inter = overlap(w, g._w);
-            const uni = w.size + g._w.size - inter;
-            // same story = several shared key words and decent overlap, within 2 days
-            const recent = Math.abs(new Date(it.date) - new Date(g.primary.date)) < 2 * 86400000;
-            if (recent && inter >= 2 && uni > 0 && inter / uni >= 0.34) {
+            // within 2 days of the head
+            if (Math.abs(new Date(it.date) - new Date(g.primary.date)) >= 2 * 86400000) continue;
+            // both name companies and none in common -> different stories, however
+            // alike the template wording ("X is rising 5% after market open")
+            if (tk.size && g._tk.size && !overlap(tk, g._tk)) continue;
+            // any member, not just the head: a reworded repost can join via the
+            // version it's closest to
+            if (g._ws.some(m => similar(w, m))) {
                 g.others.push(it);
+                g._ws.push(w);
+                for (const t of tk) g._tk.add(t);
                 placed = true;
                 break;
             }
         }
-        if (!placed) groups.push({ primary: it, others: [], _w: w });
+        if (!placed) groups.push({ primary: it, others: [], _ws: [w], _tk: tk });
     }
     return groups;
 };
