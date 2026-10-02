@@ -14,12 +14,13 @@ const sigWords = (s) => new Set((s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '
     .split(/\s+/).filter(w => w.length > 3 && !STOP.has(w))
     .map(w => w.endsWith('s') ? w.slice(0, -1) : w));
 // Cluster on Gemini's normalized analysis (consistent across sources) rather than
-// raw source text: its concise headline + ml_tags (concept labels). Falls back to
-// the raw content when no analysis exists.
+// raw source text: its concise headline + ml_tags (concept labels). The tagger
+// stopped emitting headline 2026-07-02, so fall back to the raw title there —
+// two tags alone are too few words, and Gemini tags identical titles differently.
 const clusterText = (it) => {
     const fa = it.full_analysis || {};
     const tags = (fa.ml_tags || []).join(' ').replace(/_/g, ' ');
-    return `${fa.headline || ''} ${tags}`.trim() || it.title || it.headline || '';
+    return `${fa.headline || it.title || ''} ${tags}`.trim() || it.headline || '';
 };
 const overlap = (a, b) => {
     let n = 0;
