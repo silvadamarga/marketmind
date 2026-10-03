@@ -6,6 +6,7 @@ import Feed from './components/Feed';
 import Filters from './components/Filters';
 import UniverseGuide from './components/UniverseGuide';
 import WeeklyAnalysis from './components/WeeklyAnalysis';
+import History from './components/History';
 import DailyAnalysis from './components/DailyAnalysis';
 import Inspiration from './components/Inspiration';
 import Narratives from './components/Narratives';
@@ -269,6 +270,8 @@ export default function MarketMindDashboard() {
             <Narratives />
         ) : activeTab === 'weekly' ? (
             <WeeklyAnalysis />
+        ) : activeTab === 'history' ? (
+            <History />
         ) : activeTab === 'daily' ? (
             <DailyAnalysis />
         ) : activeTab === 'inspiration' ? (

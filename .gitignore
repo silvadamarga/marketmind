@@ -34,6 +34,8 @@ yarn-error.log*
 backend/forge_brief.json
 backend/forge_inspiration_cache.json
 backend/regime_latest.json
+# the human's own fills and book: forge-pushed, never committed
+backend/history.json
 
 # forge-side artifacts living in this dir locally (not VPS code)
 posture_state.json

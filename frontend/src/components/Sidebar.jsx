@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Radio, Settings, Activity, BookOpen, LayoutGrid, BarChart3, Calendar, Layers, Lightbulb } from 'lucide-react';
+import { Radio, Settings, Activity, BookOpen, LayoutGrid, BarChart3, Calendar, Layers, Lightbulb, History } from 'lucide-react';
 
 const SidebarItem = ({ icon, label, active, onClick }) => {
     const Icon = icon;
@@ -41,6 +41,7 @@ export default function Sidebar({ activeTab, setActiveTab, leftOpen, loading, la
                 <SidebarItem icon={Calendar} label="Daily Briefing" active={activeTab === 'daily'} onClick={() => handleItemClick('daily')} />
                 <SidebarItem icon={Lightbulb} label="Inspiration" active={activeTab === 'inspiration'} onClick={() => handleItemClick('inspiration')} />
                 <SidebarItem icon={BarChart3} label="Weekly Analysis" active={activeTab === 'weekly'} onClick={() => handleItemClick('weekly')} />
+                <SidebarItem icon={History} label="History" active={activeTab === 'history'} onClick={() => handleItemClick('history')} />
                 <SidebarItem icon={Radio} label="Verified Sources" active={activeTab === 'sources'} onClick={() => handleItemClick('sources')} />
                 <SidebarItem icon={Settings} label="System Config" active={activeTab === 'settings'} onClick={() => handleItemClick('settings')} />
                 <button

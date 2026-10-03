@@ -319,6 +319,18 @@ def get_weekly_analysis():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/history")
+def get_history():
+    """The forge's history snapshot (history.py) — one row per recorded day:
+    data state, calls, alerts, paper, the human's fills, and each ledger's
+    labels. Built and pushed by the forge; nothing is computed on this box."""
+    try:
+        import history
+        snap = history.load()
+        return json_safe(snap) if snap else {"message": "No history from the forge yet."}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/api/inspiration")
 def get_forge_inspiration(refresh: bool = Query(False)):
     """Opinionated narration of the forge's fundamental ranking — lazy-built +
