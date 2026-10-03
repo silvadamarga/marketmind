@@ -147,7 +147,7 @@ const DayDetail = ({ day, detail }) => {
             </p>
 
             {detail.trader.length > 0 && (
-                <Section title={`Trader · era ${day.era.trader || 'unrecorded'}`} basis="5d open-entry · 5d / 20d close-entry">
+                <Section title={`Trader · era ${day.era.trader || 'unrecorded'}${day.trader.saw ? ` · shown the blend of ${day.trader.saw.slice(5)}` : ''}`} basis="5d open-entry · 5d / 20d close-entry">
                     <MiniTable rows={detail.trader} cols={[
                         ['t', (r) => <span className="font-semibold text-slate-200">{r.ticker}</span>],
                         ['c', (r) => <Chip className={CALL_STYLE[r.call] || 'bg-slate-700 text-slate-300'}>{CALL_SHORT[r.call] || r.call}</Chip>],
@@ -164,9 +164,9 @@ const DayDetail = ({ day, detail }) => {
                 </Section>
             )}
 
-            {detail.shortlist.length > 0 && (
-                <Section title="Shortlist (why each name was admitted)" basis="5d / 20d close-entry">
-                    <MiniTable rows={detail.shortlist} cols={[
+            {detail.cohort.length > 0 && (
+                <Section title="Cohort admits (why each name was added to deep tracking)" basis="5d / 20d close-entry">
+                    <MiniTable rows={detail.cohort} cols={[
                         ['t', (r) => <span className="font-semibold text-slate-200">{r.ticker}</span>],
                         ['r', (r) => <span className="text-slate-400">{r.route}</span>],
                         ['5', (r) => <span className={tone(r.ret5_close)}>{pct(r.ret5_close)}</span>],
@@ -265,7 +265,7 @@ const DayDetail = ({ day, detail }) => {
 const DayRow = ({ day, prevEra, open, onToggle }) => {
     const newEra = day.era.trader && prevEra && day.era.trader !== prevEra;
     const counts = (obj) => Object.entries(obj).map(([k, n]) => `${n} ${k}`).join(' · ');
-    const quiet = !day.trader.n && !day.shortlist.n && !day.alerts.n && !day.fills.n && !day.blend.n;
+    const quiet = !day.trader.n && !day.cohort.n && !day.alerts.n && !day.fills.n && !day.blend.n;
     return (
         <tr onClick={onToggle} className={`border-t border-slate-800 cursor-pointer hover:bg-slate-900/70 ${open ? 'bg-slate-900/70' : ''} ${quiet ? 'opacity-60' : ''}`}>
             <td className="py-2 pl-3 pr-2 sticky left-0 bg-slate-950 whitespace-nowrap">
@@ -273,7 +273,7 @@ const DayRow = ({ day, prevEra, open, onToggle }) => {
                     {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{fmtDay(day.date)}
                 </span>
             </td>
-            <td className="py-2 px-2"><Coverage data={day.data} acted={day.trader.n > 0 || day.shortlist.n > 0 || day.blend.n > 0} /></td>
+            <td className="py-2 px-2"><Coverage data={day.data} acted={day.trader.n > 0 || day.cohort.n > 0 || day.blend.n > 0} /></td>
             <td className="py-2 px-2 whitespace-nowrap text-xs hidden sm:table-cell">
                 {day.era.trader ? <span className="text-slate-400 font-mono">{day.era.trader}</span> : <span className="text-slate-700">·</span>}
                 {newEra && <Chip className="ml-1 bg-violet-500/20 text-violet-300" title={`era changed from ${prevEra}`}>new</Chip>}
@@ -289,7 +289,7 @@ const DayRow = ({ day, prevEra, open, onToggle }) => {
                     {!day.trader.n && <span className="text-slate-700">·</span>}
                 </div>
             </td>
-            <td className="py-2 px-2 text-xs"><Agg a={day.shortlist.ret5_close} /></td>
+            <td className="py-2 px-2 text-xs"><Agg a={day.cohort.ret5_close} /></td>
             <td className="py-2 px-2 text-xs"><Agg a={day.blend.endorsed_ret5_close} /></td>
             <td className="py-2 px-2 text-xs"><Agg a={day.blend.all_ret5_close} /></td>
             <td className={`py-2 px-2 text-xs whitespace-nowrap ${tone(day.spy.ret5_close)}`}>{pct(day.spy.ret5_close)}</td>
@@ -396,7 +396,7 @@ export default function History() {
                                     <th className="py-2 px-2" title="Axis coverage rank/fund/value/event, tripwires, backfill">Data</th>
                                     <th className="py-2 px-2 hidden sm:table-cell">Era</th>
                                     <th className="py-2 px-2" title="Mean 5d open-entry return per call type">Trader · 5d open</th>
-                                    <th className="py-2 px-2" title="Mean 5d close-entry return of the shortlist">Shortlist · 5d</th>
+                                    <th className="py-2 px-2" title="Mean 5d close-entry return of the names admitted to the deep-tracked cohort that day">Cohort · 5d</th>
                                     <th className="py-2 px-2" title="Mean 5d close-entry return of the blend's endorsed set">Endorsed · 5d</th>
                                     <th className="py-2 px-2" title="Mean 5d close-entry return of the whole blend slate — the baseline">Slate · 5d</th>
                                     <th className="py-2 px-2" title="SPY 5d close-entry on the same anchor">SPY · 5d</th>

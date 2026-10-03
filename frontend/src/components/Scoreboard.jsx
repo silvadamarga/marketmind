@@ -48,7 +48,7 @@ const NameList = ({ title, rows, side, basis }) => (
     <div className="min-w-0">
         <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
             {title}
-            {side && <span className="normal-case font-normal text-slate-600 ml-2">{nfmt(side.n)} rows · {side.n_names ?? '?'} names</span>}
+            {side && <span className="normal-case font-normal text-slate-600 ml-2">{nfmt(side.n)} rows · {side.n_names ?? '?'} names{side.mean_names != null ? ` · by name ${pct(side.mean_names)}` : ''}</span>}
         </h5>
         <table className="text-xs w-full">
             <tbody>
@@ -160,6 +160,17 @@ const GateDetail = ({ g }) => {
     );
 };
 
+// Row mean, then the same side with each name counted once: 171 trader calls
+// were 23 names, and a name called 15 times otherwise outvotes the rest.
+const SideCell = ({ s }) => (
+    <>
+        {pct(s.mean)} <span className="text-[10px] text-slate-600 hidden sm:inline">n{nfmt(s.n)}</span>
+        {s.mean_names != null && s.n_names !== s.n && (
+            <div className="text-[10px] text-slate-500 hidden sm:block">by name {pct(s.mean_names)} · {s.n_names}</div>
+        )}
+    </>
+);
+
 // A gate with nothing on one side did not operate in that era (no endorsed set
 // before 08-10, no BUY after the era that retired it), so it is left out.
 const operating = (era) => era.gates.filter((g) => g.kept.n > 0 && g.cut.n > 0);
@@ -177,8 +188,10 @@ export function Gates({ eras }) {
     const era = eras[eraIdx];
     const shown = useMemo(() => operating(era), [era]);
     const worst = useMemo(() => {
-        // Open the worst gate that has enough names on both sides to mean something.
-        const scored = shown.filter((g) => g.adds.mean !== null && g.kept.n >= 10 && g.cut.n >= 10);
+        // Open the worst gate that has enough names on both sides to mean something:
+        // names, not rows (the Delist gate's 40 rows are 2 names).
+        const names = (side) => side.n_names ?? side.n;
+        const scored = shown.filter((g) => g.adds.mean !== null && names(g.kept) >= 10 && names(g.cut) >= 10);
         return scored.length ? scored.reduce((a, b) => (b.adds.mean < a.adds.mean ? b : a)).key : null;
     }, [shown]);
     const [open, setOpen] = useState(undefined);
@@ -240,8 +253,8 @@ export function Gates({ eras }) {
                                         </td>
                                         <td className={`py-2 px-2 text-right tabular-nums font-semibold whitespace-nowrap ${g.adds.thin ? 'text-slate-500' : 'text-slate-100'}`}>{ppfmt(g.adds.mean)}</td>
                                         <td className="py-2 px-2 hidden sm:table-cell"><AddsBar v={g.adds.mean} max={max} thin={g.adds.thin} se={g.adds.se} /></td>
-                                        <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap text-slate-300">{pct(g.kept.mean)} <span className="text-[10px] text-slate-600 hidden sm:inline">n{nfmt(g.kept.n)}</span></td>
-                                        <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap text-slate-300">{pct(g.cut.mean)} <span className="text-[10px] text-slate-600 hidden sm:inline">n{nfmt(g.cut.n)}</span></td>
+                                        <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap text-slate-300"><SideCell s={g.kept} /></td>
+                                        <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap text-slate-300"><SideCell s={g.cut} /></td>
                                         <td className="py-2 px-2 text-right text-[11px] text-slate-500 whitespace-nowrap tabular-nums hidden sm:table-cell">
                                             {g.adds.se != null ? `±${(2 * g.adds.se * 100).toFixed(1)}pp · ` : ''}
                                             {g.adds.hit !== null ? `won ${Math.round(g.adds.hit * 100)}% · ` : ''}{g.adds.n_days}d · {g.adds.indep}w{g.adds.thin ? ' · thin' : ''}
@@ -255,7 +268,7 @@ export function Gates({ eras }) {
                 </table>
             </div>
             <p className="text-[11px] text-slate-600 mt-2">
-                Kept and cut: average 5-day return vs SPY. Gate adds: kept minus cut, averaged per day. Blend gates use close-entry labels,
+                Kept and cut: average 5-day return vs SPY over rows, and below it "by name", each name counted once. Gate adds: kept minus cut, averaged per day. Blend gates use close-entry labels,
                 trader and alert gates open-entry (below the thick line), so compare within a group. "thin" = under 4 independent 5-day windows.
                 The whisker and ±pp are 2 standard errors over those windows (shown from 2 windows up): a whisker across the centre line is not yet told apart from zero.
             </p>
@@ -268,6 +281,7 @@ export function Gates({ eras }) {
 const LINES = [
     { key: 'slate', label: 'Whole slate', color: '#94a3b8', dash: '4 3', on: true },
     { key: 'shortlist', label: 'Shortlist', color: '#3987e5', on: true },
+    { key: 'cohort', label: 'Cohort admit', color: '#7c8de0', dash: '2 2', on: false },
     { key: 'trader:BUY_CANDIDATE', label: 'Trader BUY', color: '#d95926', on: true },
     { key: 'trader:HOLD', label: 'Trader HOLD', color: '#199e70', on: true },
     { key: 'endorsed', label: 'Endorsed', color: '#c98500', on: false },
