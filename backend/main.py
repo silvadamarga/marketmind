@@ -331,6 +331,18 @@ def get_history():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/forge/cards")
+def get_forge_cards():
+    """The forge's intraday position cards (forge_cards.py) — the latest card per
+    held / called / shortlisted name for the day, context strip first. Built and
+    pushed by the forge; nothing is computed on this box."""
+    try:
+        import forge_cards
+        snap = forge_cards.load()
+        return json_safe(snap) if snap else {"message": "No cards from the forge yet.", "cards": []}
+    except Exception as e:
+        return {"error": str(e), "cards": []}
+
 @app.get("/api/inspiration")
 def get_forge_inspiration(refresh: bool = Query(False)):
     """Opinionated narration of the forge's fundamental ranking — lazy-built +

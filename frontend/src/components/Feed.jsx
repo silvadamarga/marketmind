@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, CheckCircle2 } from 'lucide-react';
 import FeedCard from './FeedCard';
+import ForgeCards from './ForgeCards';
 
 // Stack near-duplicate headlines (same story from many sources / reworded repeats)
 // so the glance feed shows one row per story. Greedy single pass over the
@@ -97,6 +98,9 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, filteredUpd
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent min-w-0">
                 {activeTab === 'feed' && (
                     <div className="max-w-5xl mx-auto space-y-1 sm:space-y-1.5">
+
+                        {/* The forge's per-name cards (plan 27 F1) sit above the headlines */}
+                        <ForgeCards />
 
                         {/* Search Bar */}
                         <div className="flex items-center space-x-3 mb-4 sm:mb-6">
