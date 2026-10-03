@@ -9,7 +9,6 @@ import datetime
 import time
 import math
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 
@@ -41,14 +40,6 @@ async def lifespan(app: FastAPI):
 
 # --- APP CONFIGURATION ---
 app = FastAPI(title="Market Mind API", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Direction scoring is retired from the PUBLIC feed: research proved news has no
 # tradeable direction/timing edge (coin-flip every horizon), so broadcasting a
