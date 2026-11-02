@@ -26,7 +26,7 @@ export default function Header({
                         {leftOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
                     </button>
                     <h1 className="text-xl sm:text-2xl font-semibold text-white truncate">
-                        {activeTab === 'feed' ? 'Intelligence Feed' : 'Configuration'}
+                        {activeTab === 'feed' ? 'Intelligence Feed' : activeTab === 'live' ? 'Live Desk' : 'Configuration'}
                     </h1>
                 </div>
 

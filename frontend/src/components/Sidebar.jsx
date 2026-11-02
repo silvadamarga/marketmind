@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Radio, Settings, Activity, BookOpen, LayoutGrid, BarChart3, Calendar, Layers, Lightbulb, History } from 'lucide-react';
+import { Radio, Settings, Activity, BookOpen, LayoutGrid, BarChart3, Calendar, Layers, Lightbulb, History, CandlestickChart } from 'lucide-react';
 
 const SidebarItem = ({ icon, label, active, onClick }) => {
     const Icon = icon;
@@ -36,6 +36,7 @@ export default function Sidebar({ activeTab, setActiveTab, leftOpen, loading, la
                 </div>
             )}
             <nav className="flex-1 px-4 space-y-2 overflow-hidden pt-6">
+                <SidebarItem icon={CandlestickChart} label="Live Desk" active={activeTab === 'live'} onClick={() => handleItemClick('live')} />
                 <SidebarItem icon={LayoutGrid} label="Live Intelligence" active={activeTab === 'feed'} onClick={() => handleItemClick('feed')} />
                 <SidebarItem icon={Layers} label="Narratives" active={activeTab === 'narratives'} onClick={() => handleItemClick('narratives')} />
                 <SidebarItem icon={Calendar} label="Daily Briefing" active={activeTab === 'daily'} onClick={() => handleItemClick('daily')} />

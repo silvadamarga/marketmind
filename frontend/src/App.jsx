@@ -10,12 +10,13 @@ import History from './components/History';
 import DailyAnalysis from './components/DailyAnalysis';
 import Inspiration from './components/Inspiration';
 import Narratives from './components/Narratives';
+import Live from './components/Live';
 import { SECTOR_ETFS, BENCHMARK } from './utils/constants';
 
 const API_BASE = "";
 
 export default function MarketMindDashboard() {
-  const [activeTab, setActiveTab] = useState('feed');
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'feed');
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [updates, setUpdates] = useState([]);
   const [signals, setSignals] = useState([]);
@@ -264,7 +265,9 @@ export default function MarketMindDashboard() {
         />
 
         {/* Content Body */}
-        {activeTab === 'guide' ? (
+        {activeTab === 'live' ? (
+             <Live />
+        ) : activeTab === 'guide' ? (
              <UniverseGuide />
         ) : activeTab === 'narratives' ? (
             <Narratives />
