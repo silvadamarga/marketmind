@@ -45,3 +45,5 @@ backend/forge_prep_card.json
 backend/llm_decision.json
 backend/weekly_recap.json
 NARRATIVES.md
+backend/live.json
+backend/live_hits.jsonl
