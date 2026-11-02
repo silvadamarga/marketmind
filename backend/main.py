@@ -343,6 +343,18 @@ def get_forge_cards():
     except Exception as e:
         return {"error": str(e), "cards": []}
 
+@app.get("/api/live")
+def get_live(t: str = Query(None, max_length=16), poll: int = 0):
+    """The forge's Live desk (forge plan 37): focus rows and one name's chart
+    from the pushed live.json, plus this box's own news and market strip.
+    Nothing is computed from personal data here; `poll=1` is the page's own
+    refresh and is not counted as a visit."""
+    try:
+        import live
+        return live.payload(t, poll=bool(poll))
+    except Exception as e:
+        return {"error": str(e), "rows": []}
+
 @app.get("/api/inspiration")
 def get_forge_inspiration(refresh: bool = Query(False)):
     """Opinionated narration of the forge's fundamental ranking — lazy-built +
