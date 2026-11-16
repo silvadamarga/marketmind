@@ -355,6 +355,17 @@ def get_live(t: str = Query(None, max_length=16), poll: int = 0):
     except Exception as e:
         return {"error": str(e), "rows": []}
 
+@app.get("/api/forge-feed")
+def get_forge_feed():
+    """The forge's site feed (forge plan 41 M3): what the human reads rather
+    than reacts to, plus a copy of every Signal page, from the pushed
+    feed.json. Read-only; nothing is computed here."""
+    try:
+        import forge_feed
+        return forge_feed.payload()
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
 @app.get("/api/inspiration")
 def get_forge_inspiration(refresh: bool = Query(False)):
     """Opinionated narration of the forge's fundamental ranking — lazy-built +

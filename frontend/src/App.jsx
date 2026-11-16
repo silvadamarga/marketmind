@@ -11,6 +11,7 @@ import DailyAnalysis from './components/DailyAnalysis';
 import Inspiration from './components/Inspiration';
 import Narratives from './components/Narratives';
 import Live from './components/Live';
+import ForgeFeed from './components/ForgeFeed';
 import { SECTOR_ETFS, BENCHMARK } from './utils/constants';
 
 const API_BASE = "";
@@ -267,6 +268,8 @@ export default function MarketMindDashboard() {
         {/* Content Body */}
         {activeTab === 'live' ? (
              <Live />
+        ) : activeTab === 'forge' ? (
+             <ForgeFeed />
         ) : activeTab === 'guide' ? (
              <UniverseGuide />
         ) : activeTab === 'narratives' ? (
