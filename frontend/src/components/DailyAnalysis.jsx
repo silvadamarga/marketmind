@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
     AlertTriangle, Activity, TrendingUp, TrendingDown, Gauge, LayoutGrid, CalendarRange,
-    Newspaper, Radar, Zap, LineChart, BarChart3, Tags, PieChart, Layers, Landmark, Gem,
-    Bitcoin, Sparkles, Clock,
+    Newspaper, Radar, Zap, LineChart, Tags, PieChart, Layers, Landmark, Gem,
+    Bitcoin, Sparkles, Clock, Globe2,
 } from 'lucide-react';
 
-// The Daily Briefing: the day in short plain lines first, then each number next
+// The Daily Briefing: one screen of tiles, then detail. Every number sits next
 // to what is normal for it. A count alone says nothing (180 events is a quiet
 // weekday and a loud Sunday), so news is read against the same 24h window on
 // the last 90 days, weekdays against weekdays, and prices against their own
@@ -22,27 +22,29 @@ const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 10
 const asDate = (iso) => new Date(`${iso}T12:00:00Z`);
 const shortDay = (iso) => asDate(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const timeOf = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-const whenOf = (p) => (p.live ? `today, ${timeOf(p.at)}` : `${shortDay(p.date)} close`);
+// VIX carries no `at` stamp, so a live read without one is just "today".
+const whenOf = (p) => (p.live ? (p.at ? `today ${timeOf(p.at)}` : 'today') : `${shortDay(p.date)} close`);
 const upDown = (v) => (v === null || v === undefined ? 'text-slate-500' : v >= 0 ? 'text-emerald-400' : 'text-red-400');
 const chg = (v, points) => (v === null || v === undefined ? '—' : points ? `${signed(v, 2)}pt` : `${signed(v, 1)}%`);
 const fmtPrice = (v) => (v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 }) : v.toFixed(2));
+const round = (v) => (v === null || v === undefined ? '—' : Math.round(v));
 
 // rank = {below, of}: how many of the baseline days sat below today.
 // kind 'level' reads a value (VIX, news count); 'move' reads the size of a move.
 const verdict = (rank, kind = 'level') => {
-    if (!rank || !rank.of) return { word: 'no history', cls: 'bg-slate-800 text-slate-400' };
+    if (!rank || !rank.of) return { word: 'no history', cls: 'bg-slate-800 text-slate-400', odd: false };
     const f = rank.below / rank.of;
     const w = kind === 'move'
         ? ['unusually big', 'bigger than usual', 'unusually small', 'smaller than usual', 'normal size']
         : ['well above normal', 'above normal', 'well below normal', 'below normal', 'normal'];
-    if (f >= 0.9) return { word: w[0], cls: 'bg-amber-500/15 text-amber-300' };
-    if (f >= 0.75) return { word: w[1], cls: 'bg-amber-500/10 text-amber-400' };
-    if (f <= 0.1) return { word: w[2], cls: 'bg-sky-500/15 text-sky-300' };
-    if (f <= 0.25) return { word: w[3], cls: 'bg-sky-500/10 text-sky-400' };
-    return { word: w[4], cls: 'bg-slate-800 text-slate-300' };
+    if (f >= 0.9) return { word: w[0], cls: 'bg-amber-500/15 text-amber-300', odd: true };
+    if (f >= 0.75) return { word: w[1], cls: 'bg-amber-500/10 text-amber-400', odd: true };
+    if (f <= 0.1) return { word: w[2], cls: 'bg-sky-500/15 text-sky-300', odd: kind !== 'move' };
+    if (f <= 0.25) return { word: w[3], cls: 'bg-sky-500/10 text-sky-400', odd: false };
+    return { word: w[4], cls: 'bg-slate-800 text-slate-400', odd: false };
 };
 const Pill = ({ v, rank }) => (
-    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${v.cls}`}
+    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${v.cls}`}
         title={rank ? `higher than ${rank.below} of the last ${rank.of}` : undefined}>{v.word}</span>
 );
 
@@ -54,7 +56,7 @@ const TOPIC = {
 };
 const topicName = (c) => TOPIC[c] || c.charAt(0) + c.slice(1).toLowerCase().replace(/_/g, ' ');
 
-const GROUP_ICON = { Indexes: Layers, 'Rates, credit, dollar': Landmark, Commodities: Gem, Crypto: Bitcoin, Sectors: LayoutGrid };
+const GROUP_ICON = { Indexes: Layers, 'Rates, credit, dollar': Landmark, Commodities: Gem, Crypto: Bitcoin };
 const BRIEF_ICON = { 'Fear gauge': Gauge, Sectors: LayoutGrid, '90 days': CalendarRange, News: Newspaper, Attention: Radar };
 const TONE = { up: 'bg-emerald-500/15 text-emerald-400', down: 'bg-red-500/15 text-red-400', flat: 'bg-indigo-500/15 text-indigo-300' };
 
@@ -65,7 +67,7 @@ const monthTicks = (dates) => dates.reduce((acc, d, i) => {
     return acc;
 }, []);
 const Ticks = ({ dates }) => (
-    <div className="relative h-4 mt-1 text-[10px] text-slate-600">
+    <div className="relative h-3.5 mt-0.5 text-[10px] text-slate-600">
         {monthTicks(dates).map((t) => (
             <span key={t.i} className="absolute -translate-x-1/2" style={{ left: `${(t.i / Math.max(dates.length - 1, 1)) * 100}%` }}>{t.label}</span>
         ))}
@@ -79,14 +81,14 @@ const pathOf = (vals, w, h, lo, hi) => vals
 // Small line with an optional dashed reference level and a dot on the last point.
 // Literal class names, so Tailwind generates them.
 const DOT = { 'stroke-emerald-400': 'bg-emerald-400', 'stroke-red-400': 'bg-red-400', 'stroke-amber-400': 'bg-amber-400' };
-const Spark = ({ vals, cls, refLine, w = 'w-24', h = 24 }) => {
+const Spark = ({ vals, cls, refLine, w = 'w-20', h = 20 }) => {
     if (!vals || vals.length < 2) return null;
     const lo = Math.min(...vals, refLine ?? Infinity), hi = Math.max(...vals, refLine ?? -Infinity);
     const y = (v) => (hi === lo ? h / 2 : h - ((v - lo) / (hi - lo)) * h);
     return (
         <div className={`relative ${w}`} style={{ height: h }}>
             <svg viewBox={`0 0 100 ${h}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
-                {refLine !== undefined && <line x1="0" x2="100" y1={y(refLine)} y2={y(refLine)} vectorEffect="non-scaling-stroke" strokeDasharray="2 2" strokeWidth="1" className="stroke-slate-600" />}
+                {refLine !== undefined && <line x1="0" x2="100" y1={y(refLine)} y2={y(refLine)} vectorEffect="non-scaling-stroke" strokeDasharray="2 2" strokeWidth="1" className="stroke-slate-500" />}
                 <polyline points={pathOf(vals, 100, h, lo, hi)} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="1.5" className={cls} />
             </svg>
             <span className={`absolute w-1.5 h-1.5 -mr-[3px] -mt-[3px] rounded-full right-0 ${DOT[cls] || 'bg-slate-400'}`} style={{ top: y(vals[vals.length - 1]) }} />
@@ -96,121 +98,64 @@ const Spark = ({ vals, cls, refLine, w = 'w-24', h = 24 }) => {
 
 // Today's value as a dot on the baseline's low-high range, median as a tick.
 const RangeBar = ({ low, high, median, today, fmt = (v) => v }) => {
-    if (low === null || high === null || today === null || today === undefined) return null;
+    if (low === null || low === undefined || high === null || today === null || today === undefined) return null;
     const lo = Math.min(low, today), hi = Math.max(high, today);
     const at = (v) => (hi === lo ? 50 : ((v - lo) / (hi - lo)) * 100);
     return (
-        <div className="mt-3">
-            <div className="relative h-2">
+        <div>
+            <div className="relative h-2 mt-2">
                 <div className="absolute top-[3px] h-[2px] bg-gradient-to-r from-sky-500/40 via-slate-600 to-amber-500/40 rounded" style={{ left: `${at(low)}%`, right: `${100 - at(high)}%` }} />
                 <div className="absolute top-0 h-2 w-[2px] bg-slate-300" style={{ left: `${at(median)}%` }} />
                 <div className="absolute -top-[2px] h-3 w-3 -ml-1.5 rounded-full bg-indigo-400 ring-2 ring-[#131b2e]" style={{ left: `${at(today)}%` }} />
             </div>
-            <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                <span>{fmt(low)}</span><span>normal {fmt(median)}</span><span>{fmt(high)}</span>
+            <div className="flex justify-between text-[10px] text-slate-600 mt-1 tabular-nums">
+                <span>{fmt(low)}</span><span>{fmt(high)}</span>
             </div>
         </div>
     );
 };
 
-const MetricCard = ({ icon, title, m, fmt, note }) => {
-    const Icon = icon;
+// Diverging bar around a centre line, with an optional shaded band (±band).
+const Diverging = ({ v, max, last, band }) => {
+    if (v === null || v === undefined) return <div className="h-full" />;
+    const h = Math.min(Math.abs(v) / (max || 1), 1) * 50;
+    const b = band ? Math.min(band / (max || 1), 1) * 50 : 0;
     return (
-    <div className={`${card} p-4`}>
-        <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 text-slate-400 text-sm"><Icon size={14} />{title}</span>
-            <Pill v={verdict(m?.rank)} rank={m?.rank} />
+        <div className="h-full relative">
+            {b > 0 && <div className="absolute left-0 right-0 bg-slate-700/40" style={{ top: `${50 - b}%`, bottom: `${50 - b}%` }} />}
+            <div className="absolute left-0 right-0 top-1/2 h-px bg-slate-700" />
+            <div className={`absolute left-0 right-0 rounded-[1px] ${v >= 0 ? 'bg-emerald-500' : 'bg-red-500'} ${last ? 'ring-1 ring-white/70' : 'opacity-60'}`}
+                style={v >= 0 ? { bottom: '50%', height: `${h}%` } : { top: '50%', height: `${h}%` }} />
         </div>
-        <div className="text-3xl font-bold text-white mt-1 tabular-nums">{fmt(m?.today)}</div>
-        {m?.median !== null && m?.median !== undefined && <RangeBar low={m.low} high={m.high} median={m.median} today={m.today} fmt={fmt} />}
-        {note && <div className="text-[11px] text-slate-600 mt-1">{note}</div>}
+    );
+};
+
+// Day strip: one column per item, today last; optional dashed normal level.
+const Strip = ({ items, bar, refPct, h = 'h-9' }) => (
+    <div className={`relative ${h}`}>
+        <div className="absolute inset-0 flex items-stretch gap-px">
+            {items.map((it, i) => (
+                <div key={it.date || i} className="flex-1 min-w-0 relative hover:bg-slate-700/30" title={it.title}>
+                    {bar(it, i === items.length - 1)}
+                </div>
+            ))}
+        </div>
+        {refPct !== undefined && <div className="absolute left-0 right-0 border-t border-dashed border-slate-400/60 pointer-events-none" style={{ bottom: `${refPct}%` }} />}
     </div>
 );
-};
 
-const SpyCard = ({ p, moves }) => {
-    if (!p) return <div className={`${card} p-4 text-sm text-slate-500`}>S&P 500: not enough price history.</div>;
-    const last = moves.slice(-20);
-    const max = Math.max(p.norm * 2, ...last.map((s) => Math.abs(s.move)));
+// One headline number: label + verdict, value, what normal is, a small chart.
+const Tile = ({ icon, label, value, valueCls = 'text-white', sub, v, rank, children, tip }) => {
+    const Icon = icon;
     return (
-        <div className={`${card} p-4`}>
-            <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-slate-400 text-sm"><LineChart size={14} />S&P 500</span>
-                <Pill v={verdict(p.rank, 'move')} rank={p.rank} />
+        <div className={`${card} p-3 flex flex-col min-w-0`} title={tip}>
+            <span className="flex items-center gap-1 text-xs text-slate-400 truncate"><Icon size={12} className="shrink-0" />{label}</span>
+            <div className="flex flex-wrap items-center justify-between gap-x-1 mt-0.5">
+                <span className={`text-2xl font-bold tabular-nums leading-tight ${valueCls}`}>{value}</span>
+                {v && <Pill v={v} rank={rank} />}
             </div>
-            <div className="flex items-end justify-between gap-4 mt-1">
-                <div>
-                    <div className={`text-3xl font-bold tabular-nums ${upDown(p.move)}`}>{signed(p.move, 2)}%</div>
-                    <div className="text-[11px] text-slate-500 flex items-center gap-1"><Clock size={11} />{whenOf(p)} · typical ±{p.norm}%</div>
-                </div>
-                {/* last 20 daily moves; the band is a typical day */}
-                <div className="relative w-24 sm:w-40 h-14 shrink-0" title="Last 20 trading days; shaded band = a typical day">
-                    <div className="absolute left-0 right-0 bg-slate-700/40" style={{ top: `${50 - (p.norm / max) * 50}%`, bottom: `${50 - (p.norm / max) * 50}%` }} />
-                    <div className="absolute inset-0 flex items-stretch gap-px">
-                        {last.map((s, i) => {
-                            const hgt = (Math.abs(s.move) / max) * 50;
-                            return (
-                                <div key={s.date} className="flex-1 relative" title={`${shortDay(s.date)}: ${signed(s.move, 2)}%`}>
-                                    <div className={`absolute left-0 right-0 rounded-[1px] ${s.move >= 0 ? 'bg-emerald-500' : 'bg-red-500'} ${i === last.length - 1 ? '' : 'opacity-60'}`}
-                                        style={s.move >= 0 ? { bottom: '50%', height: `${hgt}%` } : { top: '50%', height: `${hgt}%` }} />
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const VixCard = ({ p, strip }) => {
-    if (!p) return <div className={`${card} p-4 text-sm text-slate-500`}>VIX: not enough price history.</div>;
-    const vals = strip.map((s) => s.vix).filter((v) => v !== null && v !== undefined);
-    return (
-        <div className={`${card} p-4`}>
-            <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-slate-400 text-sm"><Gauge size={14} />VIX · expected swings</span>
-                <Pill v={verdict(p.rank)} rank={p.rank} />
-            </div>
-            <div className="flex items-end justify-between gap-4 mt-1">
-                <div>
-                    <div className="text-3xl font-bold text-white tabular-nums">{p.level.toFixed(1)}</div>
-                    <div className="text-[11px] text-slate-500 flex items-center gap-1"><Clock size={11} />{whenOf(p)} · {signed(p.move)}% on the day</div>
-                </div>
-                <div title={`Last ${vals.length} trading days; dashed = normal ${p.median}`}>
-                    <Spark vals={vals} refLine={p.median} cls="stroke-amber-400" w="w-24 sm:w-40" h={56} />
-                </div>
-            </div>
-            <RangeBar low={p.low} high={p.high} median={p.median} today={p.level} fmt={(v) => Number(v).toFixed(1)} />
-        </div>
-    );
-};
-
-// Sectors today: one diverging bar per sector over a shaded "typical day" band.
-const SectorBars = ({ sectors }) => {
-    const max = Math.max(0.5, ...sectors.map((s) => Math.max(Math.abs(s.move), s.norm)));
-    return (
-        <div className={`${card} p-4 space-y-1`}>
-            {sectors.map((s) => {
-                const v = verdict(s.rank, 'move');
-                const odd = s.rank && s.rank.below / s.rank.of >= 0.75;
-                const w = (Math.abs(s.move) / max) * 50;
-                const band = (s.norm / max) * 50;
-                return (
-                    <div key={s.ticker} className="grid grid-cols-[10.5rem_1fr_3rem] sm:grid-cols-[11rem_1fr_3.5rem_8rem] items-center gap-2 text-sm" title={`${s.ticker} · typical day ±${s.norm}%`}>
-                        <span className="text-slate-200 truncate">{s.name}</span>
-                        <div className="relative h-4">
-                            <div className="absolute inset-y-0 bg-slate-700/40 rounded-sm" style={{ left: `${50 - band}%`, right: `${50 - band}%` }} />
-                            <div className="absolute inset-y-0 left-1/2 w-px bg-slate-600" />
-                            <div className={`absolute top-1 bottom-1 rounded-sm ${s.move >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
-                                style={s.move >= 0 ? { left: '50%', width: `${w}%` } : { right: '50%', width: `${w}%` }} />
-                        </div>
-                        <span className={`text-right tabular-nums ${upDown(s.move)}`}>{signed(s.move, 1)}%</span>
-                        <span className="hidden sm:flex justify-end">{odd && <Pill v={v} rank={s.rank} />}</span>
-                    </div>
-                );
-            })}
-            <div className="text-[10px] text-slate-600 pt-1">Shaded band = a typical day for that sector.</div>
+            <div className="text-[10px] text-slate-500 truncate" title={typeof sub === 'string' ? sub : undefined}>{sub}</div>
+            <div className="mt-auto pt-2">{children}</div>
         </div>
     );
 };
@@ -231,17 +176,17 @@ const PriceChart = ({ r }) => {
     };
     const fromFirst = (r.spark[idx] / r.spark[0] - 1) * 100;
     return (
-        <div className={`${card} p-4`}>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                <span className="flex items-center gap-1.5 text-sm text-slate-300"><LineChart size={14} />{r.name}</span>
+        <div className={`${card} p-3 flex flex-col`}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide"><LineChart size={13} />{r.name}, {n} days</span>
                 <span className="text-sm tabular-nums">
                     <span className="text-white font-semibold">{fmtPrice(r.spark[idx])}</span>
                     <span className={`ml-2 ${upDown(fromFirst)}`}>{signed(fromFirst, 1)}%</span>
                     <span className="text-slate-500 ml-2">{shortDay(r.dates[idx])}</span>
                 </span>
             </div>
-            <div className="flex gap-2 mt-3">
-                <div ref={box} className="relative flex-1 h-48 cursor-crosshair" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+            <div className="flex gap-2 mt-2 flex-1 min-h-[9rem]">
+                <div ref={box} className="relative flex-1 cursor-crosshair" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
                     <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
                         <defs>
                             <linearGradient id="spyFill" x1="0" x2="0" y1="0" y2="1">
@@ -258,14 +203,14 @@ const PriceChart = ({ r }) => {
                     <span className="absolute w-2.5 h-2.5 -ml-[5px] -mt-[5px] rounded-full bg-indigo-400 ring-2 ring-[#131b2e]" style={{ left: `${x(idx)}%`, top: `${y(r.spark[idx])}%` }} />
                 </div>
                 {/* y axis: high, 50-day average, low */}
-                <div className="relative w-14 h-48 text-[10px] tabular-nums">
+                <div className="relative w-12 text-[10px] tabular-nums">
                     <span className="absolute -translate-y-1/2 text-slate-500" style={{ top: `${y(hi)}%` }}>{fmtPrice(hi)}</span>
                     <span className="absolute -translate-y-1/2 text-amber-500/80" style={{ top: `${y(r.avg)}%` }}>{fmtPrice(r.avg)}</span>
                     <span className="absolute -translate-y-1/2 text-slate-500" style={{ top: `${y(lo)}%` }}>{fmtPrice(lo)}</span>
                 </div>
             </div>
-            <div className="mr-16"><Ticks dates={r.dates} /></div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500 mt-1">
+            <div className="mr-14"><Ticks dates={r.dates} /></div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
                 <span><span className={upDown(r.span)}>{chg(r.span, r.points)}</span> over {n} days</span>
                 <span>{chg(r.off_high, r.points)} from high</span>
                 <span><span className="inline-block w-3 h-px bg-amber-500 align-middle mr-1" />{chg(r.vs_avg, r.points)} vs 50-day avg</span>
@@ -274,105 +219,124 @@ const PriceChart = ({ r }) => {
     );
 };
 
-// Place in the low-high range: left = at the low, right = at the high.
+// Place in the 90-day low-high range: left = at the low, right = at the high.
 const RangePos = ({ pos }) => (pos === null || pos === undefined ? <span className="text-slate-600">—</span> : (
-    <div className="relative h-2 w-20 rounded bg-gradient-to-r from-red-500/25 via-slate-800 to-emerald-500/25" title={`${Math.round(pos * 100)}% of the way from the low to the high`}>
+    <div className="relative h-2 w-14 rounded bg-gradient-to-r from-red-500/25 via-slate-800 to-emerald-500/25" title={`${Math.round(pos * 100)}% of the way from the 90-day low to the high`}>
         <div className="absolute -top-0.5 h-3 w-1.5 -ml-[3px] rounded-sm bg-white/90" style={{ left: `${pos * 100}%` }} />
     </div>
 ));
 
-const PathTable = ({ groups, days }) => (
-    <div className={`${card} overflow-hidden`}>
-        <table className="w-full text-sm tabular-nums">
-            <thead>
-                <tr className="text-[11px] uppercase tracking-wide text-slate-500 text-right">
-                    <th className="text-left font-medium px-4 py-2" />
-                    <th className="font-medium px-2 py-2 hidden md:table-cell">Last</th>
-                    <th className="font-medium px-2 py-2 hidden sm:table-cell">Day</th>
-                    <th className="font-medium px-2 py-2 hidden sm:table-cell">Week</th>
-                    <th className="font-medium px-2 py-2">Month</th>
-                    <th className="font-medium px-2 py-2">{days}d</th>
-                    <th className="font-medium px-2 py-2 hidden md:table-cell">Off high</th>
-                    <th className="font-medium px-2 py-2 text-left">Low – high</th>
-                    <th className="font-medium px-4 py-2 text-left hidden lg:table-cell">{days}d chart</th>
-                </tr>
-            </thead>
-            {groups.map((g) => {
-                const Icon = GROUP_ICON[g.group] || Layers;
-                return (
-                    <tbody key={g.group} className="border-t border-slate-800">
-                        <tr><td colSpan={9} className="px-4 pt-3 pb-1 text-xs font-semibold text-slate-400"><span className="flex items-center gap-1.5"><Icon size={13} />{g.group}</span></td></tr>
-                        {g.rows.map((r) => (
-                            <tr key={r.ticker} className="text-right hover:bg-slate-800/40">
-                                <td className="text-left text-slate-200 px-4 py-1.5" title={r.ticker}>{r.name}</td>
-                                <td className="px-2 text-slate-300 hidden md:table-cell">{fmtPrice(r.last)}</td>
-                                <td className={`px-2 hidden sm:table-cell ${upDown(r.d1)}`}>{chg(r.d1, r.points)}</td>
-                                <td className={`px-2 hidden sm:table-cell ${upDown(r.w1)}`}>{chg(r.w1, r.points)}</td>
-                                <td className={`px-2 ${upDown(r.m1)}`}>{chg(r.m1, r.points)}</td>
-                                <td className={`px-2 font-medium ${upDown(r.span)}`}>{chg(r.span, r.points)}</td>
-                                <td className="px-2 text-slate-400 hidden md:table-cell">{chg(r.off_high, r.points)}</td>
-                                <td className="px-2"><RangePos pos={r.pos} /></td>
-                                <td className="px-4 hidden lg:table-cell"><Spark vals={r.spark} cls={r.span >= 0 ? 'stroke-emerald-400' : 'stroke-red-400'} /></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                );
-            })}
-        </table>
-    </div>
-);
-
-// Day strip: one column per item, today last. Optional dashed normal level
-// (`refPct`, % of the strip's height) and month ticks under it.
-const Strip = ({ icon, title, items, bar, refPct, refLabel }) => {
+const Panel = ({ icon, title, note, children, className = '' }) => {
     const Icon = icon;
     return (
-    <div className={`${card} p-4`}>
-        <div className="flex items-center justify-between text-sm text-slate-300 mb-3">
-            <span className="flex items-center gap-1.5"><Icon size={14} />{title}</span>
-            {refLabel && <span className="text-[10px] text-slate-500">{refLabel}</span>}
-        </div>
-        <div className="relative h-24">
-            <div className="absolute inset-0 flex items-stretch gap-px">
-                {items.map((it, i) => (
-                    <div key={i} className="flex-1 min-w-0 relative hover:bg-slate-700/30" title={it.title}>
-                        {bar(it, i === items.length - 1)}
-                    </div>
-                ))}
+        <section className={`${card} overflow-hidden ${className}`}>
+            <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1.5">
+                <h2 className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide"><Icon size={13} />{title}</h2>
+                {note && <span className="text-[10px] text-slate-500 text-right">{note}</span>}
             </div>
-            {refPct !== undefined && <div className="absolute left-0 right-0 border-t border-dashed border-slate-400/60 pointer-events-none" style={{ bottom: `${refPct}%` }} />}
-        </div>
-        <Ticks dates={items.map((it) => it.date)} />
-    </div>
-);
-};
-
-// Diverging bar around a centre line, with an optional shaded band (±band).
-const Diverging = ({ v, max, last, band }) => {
-    if (v === null || v === undefined) return <div className="h-full" />;
-    const h = Math.min(Math.abs(v) / (max || 1), 1) * 50;
-    const b = band ? Math.min(band / (max || 1), 1) * 50 : 0;
-    return (
-        <div className="h-full relative">
-            {b > 0 && <div className="absolute left-0 right-0 bg-slate-700/30" style={{ top: `${50 - b}%`, bottom: `${50 - b}%` }} />}
-            <div className="absolute left-0 right-0 top-1/2 h-px bg-slate-700" />
-            <div className={`absolute left-0 right-0 rounded-[1px] ${v >= 0 ? 'bg-emerald-500' : 'bg-red-500'} ${last ? 'ring-1 ring-white/60' : 'opacity-60'}`}
-                style={v >= 0 ? { bottom: '50%', height: `${h}%` } : { top: '50%', height: `${h}%` }} />
-        </div>
+            {children}
+        </section>
     );
 };
 
-const Section = ({ icon: Icon, title, sub, children }) => (
-    <section>
-        <h2 className="flex items-center gap-2 text-lg font-bold text-white">
-            {Icon && <span className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-300"><Icon size={16} /></span>}
-            {title}
-        </h2>
-        {sub && <p className="text-xs text-slate-500 mt-1 mb-3">{sub}</p>}
-        {!sub && <div className="mb-3" />}
-        {children}
-    </section>
+const th = 'font-medium px-1.5 py-1';
+const td = 'px-1.5 py-[3px]';
+
+// Cross-asset rows: one line each, groups as thin labels.
+const AssetTable = ({ groups, days }) => (
+    <table className="w-full text-[13px] tabular-nums">
+        <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-slate-500 text-right">
+                <th className={`${th} pl-3 text-left`} />
+                <th className={`${th} hidden sm:table-cell`}>Last</th>
+                <th className={th}>Day</th>
+                <th className={`${th} hidden sm:table-cell`}>Week</th>
+                <th className={th}>Month</th>
+                <th className={th}>{days}d</th>
+                <th className={`${th} text-left`} title="Where today sits between the 90-day low and high">Range</th>
+                <th className={`${th} pr-3 text-left hidden 2xl:table-cell`}>Chart</th>
+            </tr>
+        </thead>
+        {groups.map((g) => {
+            const Icon = GROUP_ICON[g.group] || Layers;
+            return (
+                <tbody key={g.group}>
+                    <tr><td colSpan={8} className="pl-3 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 border-t border-slate-800/80"><span className="flex items-center gap-1"><Icon size={11} />{g.group}</span></td></tr>
+                    {g.rows.map((r) => (
+                        <tr key={r.ticker} className="text-right hover:bg-slate-800/40">
+                            <td className={`${td} pl-3 text-left text-slate-200 truncate max-w-[7.5rem] sm:max-w-[11rem]`} title={`${r.name} · ${r.ticker}`}>{r.name}</td>
+                            <td className={`${td} text-slate-400 hidden sm:table-cell`}>{fmtPrice(r.last)}</td>
+                            <td className={`${td} ${upDown(r.d1)}`}>{chg(r.d1, r.points)}</td>
+                            <td className={`${td} hidden sm:table-cell ${upDown(r.w1)}`}>{chg(r.w1, r.points)}</td>
+                            <td className={`${td} ${upDown(r.m1)}`}>{chg(r.m1, r.points)}</td>
+                            <td className={`${td} font-medium ${upDown(r.span)}`} title={`${chg(r.off_high, r.points)} from the ${days}-day high`}>{chg(r.span, r.points)}</td>
+                            <td className={td}><RangePos pos={r.pos} /></td>
+                            <td className={`${td} pr-3 hidden 2xl:table-cell`}><Spark vals={r.spark} cls={r.span >= 0 ? 'stroke-emerald-400' : 'stroke-red-400'} /></td>
+                        </tr>
+                    ))}
+                </tbody>
+            );
+        })}
+    </table>
 );
+
+// Sectors: today's move over each sector's typical-day band, then the longer
+// view. Sector funds without a live read today fall back to their last close.
+const SectorTable = ({ rows, days }) => {
+    const max = Math.max(0.5, ...rows.map((s) => Math.max(Math.abs(s.move ?? 0), s.norm ?? 0)));
+    return (
+        <table className="w-full text-[13px] tabular-nums">
+            <thead>
+                <tr className="text-[10px] uppercase tracking-wide text-slate-500 text-right">
+                    <th className={`${th} pl-3 text-left`} />
+                    <th className={`${th} text-left w-[28%] whitespace-nowrap`} title="Shaded band = a typical day for that sector"><span className="sm:hidden">Today</span><span className="hidden sm:inline">Today vs typical</span></th>
+                    <th className={th}>Day</th>
+                    <th className={`${th} hidden sm:table-cell`}>Month</th>
+                    <th className={th}>{days}d</th>
+                    <th className={`${th} pr-3 text-left`}>Range</th>
+                </tr>
+            </thead>
+            <tbody className="border-t border-slate-800/80">
+                {rows.map((s) => {
+                    const v = verdict(s.rank, 'move');
+                    const w = s.move === null || s.move === undefined ? 0 : (Math.abs(s.move) / max) * 50;
+                    const band = s.norm ? (s.norm / max) * 50 : 0;
+                    return (
+                        <tr key={s.ticker} className="text-right hover:bg-slate-800/40">
+                            <td className={`${td} pl-3 text-left text-slate-200 truncate max-w-[7.5rem] sm:max-w-[10rem]`} title={`${s.name} · ${s.ticker}${s.norm ? ` · typical day ±${s.norm}%` : ''}`}>{s.name}</td>
+                            <td className={td}>
+                                <div className="relative h-3.5" title={s.rank ? `${v.word}: bigger than ${s.rank.below} of the last ${s.rank.of} days` : undefined}>
+                                    {band > 0 && <div className="absolute inset-y-0 bg-slate-700/50 rounded-sm" style={{ left: `${50 - band}%`, right: `${50 - band}%` }} />}
+                                    <div className="absolute inset-y-0 left-1/2 w-px bg-slate-600" />
+                                    <div className={`absolute top-[3px] bottom-[3px] rounded-sm ${s.move >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
+                                        style={s.move >= 0 ? { left: '50%', width: `${w}%` } : { right: '50%', width: `${w}%` }} />
+                                </div>
+                            </td>
+                            <td className={`${td} whitespace-nowrap ${upDown(s.move)}`}>
+                                {v.odd && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 mr-1 align-middle" title={v.word} />}
+                                {chg(s.move)}
+                            </td>
+                            <td className={`${td} hidden sm:table-cell ${upDown(s.m1)}`}>{chg(s.m1)}</td>
+                            <td className={`${td} font-medium ${upDown(s.span)}`}>{chg(s.span)}</td>
+                            <td className={`${td} pr-3`}><RangePos pos={s.pos} /></td>
+                        </tr>
+                    );
+                })}
+            </tbody>
+        </table>
+    );
+};
+
+// The same story often lands from several outlets or twice from one feed.
+const dedupe = (events) => {
+    const seen = new Set();
+    return events.filter((e) => {
+        const k = (e.summary || e.title || '').toLowerCase().replace(/\W+/g, ' ').trim();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
+};
 
 export default function DailyAnalysis() {
     const [data, setData] = useState(null);
@@ -406,189 +370,199 @@ export default function DailyAnalysis() {
     const h = data.history && !data.history.error ? data.history : null;
     const news = h?.news;
     const prices = h?.prices;
-    const unit = news ? `${news.day_kind}s` : 'days';
+    const m = news?.metrics;
+    const unit = news ? news.day_kind : 'day';
     const strip = news?.strip || [];
     const maxCount = Math.max(1, ...strip.map((s) => s.count));
     const maxNet = Math.max(0.05, ...strip.map((s) => Math.abs(s.net || 0)));
     const spyStrip = prices?.strip || [];
-    const maxMove = Math.max(0.5, ...spyStrip.map((s) => Math.abs(s.move)));
-    const normCount = news?.metrics.count.median;
-    const spyPath = prices?.paths?.flatMap((g) => g.rows).find((r) => r.ticker === 'SPY');
+    const spyLast = spyStrip.slice(-30);
+    const maxMove = Math.max(0.5, ...spyLast.map((s) => Math.abs(s.move)));
+    const vixVals = spyStrip.map((s) => s.vix).filter((v) => v !== null && v !== undefined);
+    const spy = prices?.spy;
+    const vix = prices?.vix;
+    const groups = prices?.paths || [];
+    const spyPath = groups.flatMap((g) => g.rows).find((r) => r.ticker === 'SPY');
+    const assetGroups = groups.filter((g) => g.group !== 'Sectors');
+    // Sector rows: the longer view from the paths, today's read and its
+    // typical-day band from `sectors`; best to worst today.
+    const today = Object.fromEntries((prices?.sectors || []).map((s) => [s.ticker, s]));
+    const sectorRows = (groups.find((g) => g.group === 'Sectors')?.rows || [])
+        .map((r) => ({ ...r, move: today[r.ticker]?.move ?? r.d1, norm: today[r.ticker]?.norm, rank: today[r.ticker]?.rank }))
+        .sort((a, b) => (b.move ?? -99) - (a.move ?? -99));
+    const stories = dedupe(priority_events);
+    const maxN = Math.max(1, ...(news?.names || []).map((x) => x.today));
 
     return (
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-            <div className="max-w-6xl mx-auto space-y-10">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+            <div className="max-w-7xl mx-auto space-y-3">
 
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                    <div>
-                        <h1 className="text-3xl font-bold text-white">Daily Briefing</h1>
-                        <p className="text-slate-400 text-sm mt-1">Today, set against its own recent history.</p>
-                    </div>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <h1 className="text-xl font-bold text-white">Daily Briefing <span className="text-sm font-normal text-slate-500">· today against its own last {h?.baseline_days ?? 90} days</span></h1>
                     {h && <span className="flex items-center gap-1 text-xs text-slate-500"><Clock size={12} />updated {timeOf(h.as_of)}</span>}
                     {data.history?.error && <p className="w-full text-xs text-amber-500">History unavailable: {data.history.error}</p>}
                 </div>
 
-                {/* The day in short lines */}
-                {h?.summary?.length > 0 && (
-                    <div className={`${card} p-5 bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30`}>
-                        <h2 className="flex items-center gap-2 text-lg font-bold text-white mb-4"><Sparkles size={18} className="text-indigo-300" />The day in brief</h2>
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-3">
-                            {h.summary.map((x) => {
-                                const Icon = x.topic === 'Stocks' ? (x.tone === 'down' ? TrendingDown : TrendingUp) : (BRIEF_ICON[x.topic] || Sparkles);
-                                return (
-                                    <div key={x.topic} className="flex gap-3">
-                                        <span className={`shrink-0 h-8 w-8 rounded-lg flex items-center justify-center ${TONE[x.tone] || TONE.flat}`}><Icon size={16} /></span>
-                                        <div>
-                                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{x.topic}</div>
-                                            <div className="text-slate-200 text-sm leading-snug">{x.text}</div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
+                {/* Headline numbers, each against its normal */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+                    <Tile icon={LineChart} label="S&P 500" value={spy ? `${signed(spy.move, 2)}%` : '—'} valueCls={upDown(spy?.move)}
+                        v={spy && verdict(spy.rank, 'move')} rank={spy?.rank}
+                        sub={spy ? `${whenOf(spy)} · typical ±${spy.norm}%` : 'not enough price history'}>
+                        <Strip items={spyLast.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${signed(s.move, 2)}%` }))}
+                            bar={(s, last) => <Diverging v={s.move} max={maxMove} last={last} band={spy?.norm} />} />
+                    </Tile>
+                    <Tile icon={Gauge} label="VIX, fear gauge" value={vix ? vix.level.toFixed(1) : '—'}
+                        v={vix && verdict(vix.rank)} rank={vix?.rank}
+                        sub={vix ? `${signed(vix.move)}% ${whenOf(vix)} · normal ${vix.median}` : 'not enough price history'}>
+                        <div title={`Last ${vixVals.length} sessions; dashed = normal ${vix?.median}`}>
+                            <Spark vals={vixVals} refLine={vix?.median} cls="stroke-amber-400" w="w-full" h={36} />
                         </div>
-                    </div>
-                )}
+                    </Tile>
+                    <Tile icon={Newspaper} label="Stories, 24h" value={round(m?.count.today ?? total_events)}
+                        v={m && verdict(m.count.rank)} rank={m?.count.rank}
+                        sub={m ? `normal ${unit} ~${round(m.count.median)}` : null}
+                        tip="Story counts also move with how much the site collects.">
+                        <Strip refPct={m ? (m.count.median / maxCount) * 100 : undefined}
+                            items={strip.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${s.count} stories` }))}
+                            bar={(s, last) => (
+                                <div className={`absolute bottom-0 left-0 right-0 ${last ? 'bg-indigo-300' : s.weekend ? 'bg-slate-700' : 'bg-indigo-400/50'}`}
+                                    style={{ height: `${(s.count / maxCount) * 100}%` }} />
+                            )} />
+                    </Tile>
+                    <Tile icon={TrendingUp} label="News tone" value={m ? signed(m.net.today * 100, 0) : '—'} valueCls={upDown(m?.net.today)}
+                        v={m && verdict(m.net.rank)} rank={m?.net.rank}
+                        sub={`${sentiment_counts.BULLISH} up · ${sentiment_counts.BEARISH} down · normal ${m ? signed(m.net.median * 100, 0) : '—'}`}
+                        tip="Bullish minus bearish stories, as a share of all stories.">
+                        <Strip items={strip.map((s) => ({ ...s, title: `${shortDay(s.date)}: tone ${s.net === null ? '—' : signed(s.net * 100, 0)}` }))}
+                            bar={(s, last) => <Diverging v={s.net} max={maxNet} last={last} />} />
+                    </Tile>
+                    <Tile icon={Zap} label="High impact" value={round(m?.priority.today)}
+                        v={m && verdict(m.priority.rank)} rank={m?.priority.rank}
+                        sub={m ? `normal ~${round(m.priority.median)} a ${unit}` : null}>
+                        {m && <RangeBar low={m.priority.low} high={m.priority.high} median={m.priority.median} today={m.priority.today} fmt={round} />}
+                    </Tile>
+                    <Tile icon={Globe2} label="Economy & politics" value={pct(m?.macro.today)}
+                        v={m && verdict(m.macro.rank)} rank={m?.macro.rank}
+                        sub={m ? `of stories · normal ${pct(m.macro.median)}` : null}>
+                        {m && <RangeBar low={m.macro.low} high={m.macro.high} median={m.macro.median} today={m.macro.today} fmt={pct} />}
+                    </Tile>
+                </div>
 
-                {/* Market today */}
-                {prices && (
-                    <Section icon={Activity} title="Markets today" sub="Moves against what is normal for each market.">
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <SpyCard p={prices.spy} moves={spyStrip} />
-                                <VixCard p={prices.vix} strip={spyStrip} />
-                            </div>
-                            {prices.sectors?.length > 0 && (
-                                <div>
-                                    <div className="flex items-center gap-1.5 text-sm text-slate-300 mb-2">
-                                        <LayoutGrid size={14} />Sectors, best to worst <span className="text-slate-500 text-xs">· {whenOf(prices.sectors[0])}</span>
-                                    </div>
-                                    <SectorBars sectors={prices.sectors} />
-                                </div>
-                            )}
-                        </div>
-                    </Section>
-                )}
-
-                {/* Prices against their own last 90 days */}
-                {prices?.paths?.length > 0 && (
-                    <Section icon={CalendarRange} title={`The last ${h.baseline_days} days`} sub="Hover the chart for any day. Bar = where each price sits between its low and high.">
-                        <div className="space-y-4">
-                            {spyPath && <PriceChart r={spyPath} />}
-                            <PathTable groups={prices.paths} days={h.baseline_days} />
-                        </div>
-                    </Section>
-                )}
-
-                {/* News today vs normal */}
-                <Section icon={Newspaper} title="News today" sub={news ? `Last 24 hours vs the same hours on the last ${news.like_days} ${unit}.` : null}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <MetricCard icon={Newspaper} title="Stories" m={news?.metrics.count ?? { today: total_events }} fmt={(v) => (v === null || v === undefined ? '—' : Math.round(v))}
-                            note="Also moves with how much the site collects." />
-                        <MetricCard icon={TrendingUp} title="Tone" m={news?.metrics.net} fmt={(v) => (v === null || v === undefined ? '—' : signed(v * 100, 0))}
-                            note={`${sentiment_counts.BULLISH} bullish · ${sentiment_counts.BEARISH} bearish · ${sentiment_counts.NEUTRAL} neutral`} />
-                        <MetricCard icon={Landmark} title="Economy & politics" m={news?.metrics.macro} fmt={pct} />
-                        <MetricCard icon={Zap} title="High impact" m={news?.metrics.priority} fmt={(v) => (v === null || v === undefined ? '—' : Math.round(v))} />
-                    </div>
-                </Section>
-
-                {/* The baseline span, day by day */}
-                {news && (
-                    <Section icon={BarChart3} title="Day by day" sub="Today is the outlined column on the right. Hover any column.">
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                            <Strip icon={Newspaper} title="Stories" refLabel={normCount ? `- - normal weekday ${Math.round(normCount)}` : null}
-                                refPct={normCount ? (normCount / maxCount) * 100 : undefined}
-                                items={strip.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${s.count} stories` }))}
-                                bar={(s, last) => (
-                                    <div className={`absolute bottom-0 left-0 right-0 rounded-t-[1px] ${last ? 'bg-indigo-300' : s.weekend ? 'bg-slate-700' : 'bg-indigo-400/60'}`}
-                                        style={{ height: `${(s.count / maxCount) * 100}%` }} />
-                                )} />
-                            <Strip icon={TrendingUp} title="Tone"
-                                items={strip.map((s) => ({ ...s, title: `${shortDay(s.date)}: tone ${s.net === null ? '—' : signed(s.net * 100, 0)}` }))}
-                                bar={(s, last) => <Diverging v={s.net} max={maxNet} last={last} />} />
-                            <Strip icon={LineChart} title="S&P 500 daily move" refLabel={prices?.spy ? `band = typical ±${prices.spy.norm}%` : null}
-                                items={spyStrip.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${signed(s.move, 2)}%${s.vix ? ` · VIX ${s.vix.toFixed(1)}` : ''}` }))}
-                                bar={(s, last) => <Diverging v={s.move} max={maxMove} last={last} band={prices?.spy?.norm} />} />
-                        </div>
-                    </Section>
-                )}
-
-                {/* Names and topics against their own norm */}
-                {news && (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <Section icon={Tags} title="Stocks in the news" sub="Stories today vs each stock's daily average.">
-                            <div className={`${card} divide-y divide-slate-800`}>
-                                {news.names.length === 0 && <div className="p-4 text-sm text-slate-500 italic">No named stocks today.</div>}
-                                {news.names.map((n) => {
-                                    const maxN = Math.max(...news.names.map((x) => x.today));
-                                    return (
-                                        <div key={n.name} className="grid grid-cols-[4.5rem_1fr_4rem] items-center gap-3 px-4 py-2">
-                                            <span className="font-mono font-semibold text-slate-200">{n.name}</span>
-                                            <div className="relative h-2.5 bg-slate-800 rounded" title={`${n.today} today, usually ${n.avg}/day`}>
-                                                <div className="absolute inset-y-0 left-0 rounded bg-indigo-400/70" style={{ width: `${(n.today / maxN) * 100}%` }} />
-                                                <div className="absolute -top-0.5 h-3.5 w-[2px] bg-slate-200" style={{ left: `${Math.min(n.avg / maxN, 1) * 100}%` }} />
+                {/* The day in short lines, next to the S&P 500's last 90 days */}
+                {(h?.summary?.length > 0 || spyPath) && (
+                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                        {h?.summary?.length > 0 && (
+                            <Panel icon={Sparkles} title="The day in brief" className={`${spyPath ? 'lg:col-span-3' : 'lg:col-span-5'} bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30`}>
+                                <div className="px-3 pb-3 space-y-2">
+                                    {h.summary.map((x) => {
+                                        const Icon = x.topic === 'Stocks' ? (x.tone === 'down' ? TrendingDown : TrendingUp) : (BRIEF_ICON[x.topic] || Sparkles);
+                                        return (
+                                            <div key={x.topic} className="flex gap-2.5 items-start">
+                                                <span className={`shrink-0 h-6 w-6 rounded-md flex items-center justify-center ${TONE[x.tone] || TONE.flat}`}><Icon size={13} /></span>
+                                                <p className="text-sm text-slate-200 leading-snug pt-0.5">
+                                                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mr-1.5">{x.topic}</span>{x.text}
+                                                </p>
                                             </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded text-center ${n.new ? 'bg-indigo-500/20 text-indigo-300' : n.unusual ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
-                                                {n.new ? 'new' : `${n.ratio}×`}
-                                            </span>
+                                        );
+                                    })}
+                                </div>
+                            </Panel>
+                        )}
+                        {spyPath && <div className={h?.summary?.length > 0 ? 'lg:col-span-2 flex' : 'lg:col-span-5 flex'}><div className="flex-1 min-w-0 flex flex-col [&>div]:flex-1"><PriceChart r={spyPath} /></div></div>}
+                    </div>
+                )}
+
+                {/* Markets: everything else, then sectors */}
+                {groups.length > 0 && (
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
+                        {assetGroups.length > 0 && (
+                            <Panel icon={Activity} title="Markets" note={spy ? whenOf(spy) : null}>
+                                <div className="pb-2 overflow-x-auto"><AssetTable groups={assetGroups} days={h.baseline_days} /></div>
+                            </Panel>
+                        )}
+                        {sectorRows.length > 0 && (
+                            <Panel icon={LayoutGrid} title="Sectors, best to worst today" note={<><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 mr-1 align-middle" />bigger move than usual</>}>
+                                <div className="pb-2 overflow-x-auto"><SectorTable rows={sectorRows} days={h.baseline_days} /></div>
+                            </Panel>
+                        )}
+                    </div>
+                )}
+
+                {/* News: what mattered, who was named, what it was about */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+                    <Panel icon={Zap} title="High-impact stories" className="lg:col-span-2 lg:row-span-2"
+                        note={thresholds ? `last 24h · impact ≥ ${thresholds.impact} or novelty ≥ ${thresholds.novelty}` : null}>
+                        {stories.length === 0 ? (
+                            <div className="px-3 pb-3 text-sm text-slate-500 italic">None in the last 24 hours.</div>
+                        ) : (
+                            <ul className="divide-y divide-slate-800/80 border-t border-slate-800/80">
+                                {/* The stored title is often the outlet's name, so the headline (body) leads. */}
+                                {stories.map((e) => (
+                                    <li key={e.id} className="flex gap-3 px-3 py-2 hover:bg-slate-800/40">
+                                        <span className="shrink-0 mt-0.5 w-6 h-5 rounded text-[11px] font-bold tabular-nums flex items-center justify-center bg-red-500/15 text-red-300" title={`impact ${e.impact}/10`}>{e.impact}</span>
+                                        <div className="min-w-0">
+                                            <p className="text-sm text-slate-200 leading-snug">{e.summary || e.title}</p>
+                                            <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                                <span className="font-semibold text-blue-400">{e.source}</span>
+                                                {e.title && e.title !== e.summary && e.title !== e.source && <> · {e.title}</>}
+                                                {' · '}{new Date(e.date).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+                                            </p>
                                         </div>
-                                    );
-                                })}
-                                <div className="px-4 py-2 text-[10px] text-slate-600">Bar = stories today · tick = usual day</div>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </Panel>
+
+                    {news && (
+                        <Panel icon={Tags} title="Stocks in the news" note="bar = today · tick = usual day">
+                            <div className="px-3 pb-2.5 space-y-1">
+                                {news.names.length === 0 && <div className="text-sm text-slate-500 italic">No named stocks today.</div>}
+                                {news.names.map((n) => (
+                                    <div key={n.name} className="grid grid-cols-[3.5rem_1fr_2.75rem] items-center gap-2 text-[13px]">
+                                        <span className="font-mono font-semibold text-slate-200">{n.name}</span>
+                                        <div className="relative h-2 bg-slate-800 rounded" title={`${n.today} stories today, usually ${n.avg}/day`}>
+                                            <div className="absolute inset-y-0 left-0 rounded bg-indigo-400/70" style={{ width: `${(n.today / maxN) * 100}%` }} />
+                                            <div className="absolute -top-0.5 h-3 w-[2px] bg-slate-200" style={{ left: `${Math.min(n.avg / maxN, 1) * 100}%` }} />
+                                        </div>
+                                        <span className={`text-[11px] px-1 rounded text-center tabular-nums ${n.new ? 'bg-indigo-500/20 text-indigo-300' : n.unusual ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'}`}
+                                            title={`${n.today} today vs ${n.avg}/day`}>
+                                            {n.new ? 'new' : `${n.ratio}×`}
+                                        </span>
+                                    </div>
+                                ))}
                             </div>
-                        </Section>
-                        <Section icon={PieChart} title="What the news is about" sub="Share of today's stories · tick = usual share.">
-                            <div className={`${card} p-4 space-y-3`}>
+                        </Panel>
+                    )}
+
+                    {news && (
+                        <Panel icon={PieChart} title="What the news is about" note="share · tick = usual">
+                            <div className="px-3 pb-2.5 space-y-1.5">
                                 {news.categories.length === 0 && <div className="text-sm text-slate-500 italic">No data.</div>}
                                 {news.categories.map((c) => {
                                     const diff = c.norm_share !== null && c.share !== null ? c.share - c.norm_share : null;
                                     return (
-                                        <div key={c.name}>
-                                            <div className="flex justify-between text-sm">
-                                                <span className="text-slate-300">{topicName(c.name)}</span>
-                                                <span className="tabular-nums text-slate-400">{pct(c.share)}
-                                                    {diff !== null && Math.abs(diff) >= 0.03 && <span className={`ml-2 text-xs ${diff > 0 ? 'text-amber-400' : 'text-sky-400'}`}>{diff > 0 ? '▲' : '▼'} {Math.round(Math.abs(diff) * 100)}pt</span>}
-                                                </span>
-                                            </div>
-                                            <div className="relative h-2 bg-slate-800 rounded mt-1">
+                                        <div key={c.name} className="grid grid-cols-[6.5rem_1fr_4.5rem] items-center gap-2 text-[13px]">
+                                            <span className="text-slate-300 truncate">{topicName(c.name)}</span>
+                                            <div className="relative h-2 bg-slate-800 rounded">
                                                 <div className="absolute inset-y-0 left-0 bg-indigo-400/70 rounded" style={{ width: `${(c.share || 0) * 100}%` }} />
                                                 {c.norm_share !== null && <div className="absolute -top-0.5 h-3 w-[2px] bg-slate-200" style={{ left: `${c.norm_share * 100}%` }} />}
                                             </div>
+                                            <span className="tabular-nums text-right text-slate-400">{pct(c.share)}
+                                                {diff !== null && Math.abs(diff) >= 0.03 && <span className={`ml-1 text-[11px] ${diff > 0 ? 'text-amber-400' : 'text-sky-400'}`}>{diff > 0 ? '▲' : '▼'}{Math.round(Math.abs(diff) * 100)}</span>}
+                                            </span>
                                         </div>
                                     );
                                 })}
                             </div>
-                        </Section>
-                    </div>
-                )}
+                        </Panel>
+                    )}
+                </div>
 
-                {/* High-impact stories. The stored title is often the outlet's
-                    name, so the headline (body) leads. */}
-                <Section icon={Zap} title="High-impact stories" sub={thresholds ? `Last 24h · impact ≥ ${thresholds.impact} or novelty ≥ ${thresholds.novelty}` : null}>
-                    <div className="space-y-2">
-                        {priority_events.length === 0 ? (
-                            <div className="text-slate-500 italic">None in the last 24 hours.</div>
-                        ) : (
-                            priority_events.map((event) => (
-                                <div key={event.id} className={`${card} p-4 hover:border-slate-600 transition-colors`}>
-                                    <div className="flex justify-between items-start gap-3">
-                                        <p className="text-slate-200 font-medium leading-snug">{event.summary || event.title}</p>
-                                        <div className="flex space-x-0.5 shrink-0 pt-1" title={`impact ${event.impact}/10`}>
-                                            {[...Array(5)].map((_, i) => (
-                                                <div key={i} className={`w-1 h-3 rounded-sm ${i < (event.impact / 2) ? 'bg-red-500' : 'bg-slate-800'}`} />
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <div className="text-xs text-slate-500 mt-1.5">
-                                        <span className="font-semibold text-blue-400 uppercase tracking-wider">{event.source}</span>
-                                        {event.title && event.title !== event.summary && <> · {event.title}</>}
-                                        {' · '}{new Date(event.date).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </Section>
-
+                <p className="text-[10px] text-slate-600 pb-2">
+                    News is compared with the same 24 hours on the last {news?.like_days ?? '—'} {unit}s; story counts also move with how much the site collects.
+                    Prices are compared with each market's own typical day and {h?.baseline_days ?? 90}-day range. Decision support only.
+                </p>
             </div>
         </div>
     );
