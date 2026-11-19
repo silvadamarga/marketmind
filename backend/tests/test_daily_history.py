@@ -78,7 +78,7 @@ def test_price_path_returns_and_range():
     r = daily_history._price_path(sess, NOW, "SPY")
     assert r["pos"] == 1.0 and r["off_high"] == 0.0        # straight line up: at the high
     assert r["w1"] == round((sess[-1]["close"] / sess[-6]["close"] - 1) * 100, 2)
-    assert sess[0]["date"] < r["spark_dates"][0]              # trimmed to the 90-day span
+    assert sess[0]["date"] < r["dates"][0]                    # trimmed to the 90-day span
     y = daily_history._price_path(sess, NOW, "^TNX")
     assert y["points"] and y["d1"] == 1.0                     # yields move in points
 
@@ -89,9 +89,9 @@ def test_summary_names_and_drops_missing():
               "paths": [{"group": "Sectors", "rows": [
                   {"ticker": "XLV", "name": "Health care", "pos": 0.0, "off_high": -4.0}]}]}
     out = {x["topic"]: x["text"] for x in daily_history.summary({}, prices)}
-    assert "down 1.2% at the last close (Wed, Nov 18)" in out["Stocks"]
+    assert out["Stocks"].startswith("S&P 500 -1.2% at Wed's close")
     assert "much bigger than usual" in out["Stocks"]
-    assert out["Bigger picture"] == "At or near 90-day lows: Health care."
+    assert out["90 days"] == "Near 90-day lows: Health care."
     assert "Fear gauge" not in out and "News" not in out     # no data, no sentence
 
 if __name__ == "__main__":
