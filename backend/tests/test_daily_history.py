@@ -129,9 +129,8 @@ def test_long_is_weekly_and_joins_the_chart():
     assert daily_history._long(row, [["2025-12-05", 1.0]]) is None     # nothing before the chart
 
 
-def test_forge_closes_missing_file_is_empty(tmp_path=None):
-    import pathlib
-    assert daily_history._forge_closes(pathlib.Path("/nonexistent/forge_history.json")) == {}
+def test_forge_closes_missing_file_is_empty():
+    assert daily_history._forge_closes(daily_history.Path("/nonexistent/forge_history.json")) == {}
 
 
 def test_summary_names_and_drops_missing():

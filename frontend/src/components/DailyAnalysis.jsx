@@ -5,12 +5,15 @@ import {
     Bitcoin, Sparkles, Clock, Globe2,
 } from 'lucide-react';
 
-// The Daily Briefing: one screen of tiles, then detail. Every number sits next
-// to what is normal for it. A count alone says nothing (180 events is a quiet
-// weekday and a loud Sunday), so news is read against the same 24h window on
-// the last 90 days, weekdays against weekdays, and prices against their own
-// typical daily move and 90-day range (backend/daily_history.py). Funds are
-// always shown by name, never by ticker. Decision support only.
+// The Daily Briefing, top to bottom: headline tiles, the day in brief, the
+// main chart (markets, sectors, VIX and news on one time axis, up to 5 years),
+// the market and sector tables, then the news. Every number sits next to what
+// is normal for it, and every chart but the main one shows the same 90 days.
+// A count alone says nothing (180 events is a quiet weekday and a loud
+// Sunday), so news is read against the same 24h window on the last 90 days,
+// weekdays against weekdays, and prices against their own typical daily move
+// and 90-day range (backend/daily_history.py). Funds are always shown by
+// name, never by ticker. Decision support only.
 
 const card = 'bg-[#131b2e] border border-slate-800 rounded-xl';
 const signed = (v, d = 1) => {
@@ -118,9 +121,9 @@ const Diverging = ({ v, max, last, band }) => {
 };
 
 // Day strip: one column per item, today last; optional dashed normal level.
-const Strip = ({ items, bar, refPct, h = 'h-9', gap = 'gap-px' }) => (
-    <div className={`relative ${h}`}>
-        <div className={`absolute inset-0 flex items-stretch ${gap}`}>
+const Strip = ({ items, bar, refPct }) => (
+    <div className="relative h-9">
+        <div className="absolute inset-0 flex items-stretch gap-px">
             {items.map((it, i) => (
                 <div key={it.date || i} className="flex-1 min-w-0 relative hover:bg-slate-700/30" title={it.title}>
                     {bar(it, i === items.length - 1)}

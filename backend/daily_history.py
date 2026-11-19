@@ -10,6 +10,10 @@ next to what is normal for it:
 - Names and categories: today's mentions against their own daily average.
 - Prices: SPY, VIX and the sector ETFs from market_data's 15-minute bars. A
   move is read against that ticker's median absolute daily move.
+- Charts: every verdict stays on the 90 days, but the page's main chart
+  reaches back CHART_DAYS from market_data and, for SPY and the sector funds,
+  five years from the forge's forge_history.json (weekly before the VPS's own
+  year). Row series carry `from90` so the small charts show the 90 days only.
 
 Decision support only. News counts follow how much the site collects, so a
 source going quiet moves them as much as the market does; the page says so.
@@ -24,7 +28,10 @@ from zoneinfo import ZoneInfo
 BASELINE_DAYS = 90          # windows compared against today
 MIN_BASELINE = 5            # fewer like-days than this -> no verdict
 PRICE_SESSIONS = 60         # sessions in a price baseline (~90 calendar days)
-CHART_DAYS = 365            # charts reach this far back; every verdict stays on the 90 days
+CHART_DAYS = 365            # the main chart reaches this far back; every verdict stays on the 90 days
+SPLIT_TOL = 0.02            # a one-day ratio this close to 1/k or k (k=2..10) is a split
+# Five years of daily closes the forge pushes (`scrape export-history --push`).
+FORGE_HISTORY = Path(__file__).with_name("forge_history.json")
 UNUSUAL_MIN_COUNT = 3       # a name needs this many mentions today to be "unusual"
 UNUSUAL_RATIO = 3.0         # ... and this many times its daily average
 RATIO_FLOOR = 0.5           # daily average floor, so a first mention isn't "inf x"
@@ -251,11 +258,6 @@ def _daily_closes(conn, lo, hi):
     return out
 
 
-# Five years of daily closes the forge pushes (`scrape export-history --push`):
-# SPY and the sector funds. Spliced before the VPS's own year, weekly.
-FORGE_HISTORY = Path(__file__).with_name("forge_history.json")
-
-
 def _forge_closes(path=FORGE_HISTORY):
     try:
         return json.loads(path.read_text())["closes"]
@@ -280,9 +282,6 @@ def _long(row, forge_pts):
         return None
     pts = sorted(weeks.values())
     return {"long": [round(c * k, 4) for _, c in pts], "long_dates": [d for d, _ in pts]}
-
-
-SPLIT_TOL = 0.02            # a one-day ratio this close to 1/k or k (k=2..10) is a split
 
 
 def _split_factor(ratio):
@@ -327,8 +326,8 @@ def _price_path(sessions, now, ticker, older=()):
     """Where a price sits against its own last BASELINE_DAYS: returns over 1
     week, 1 month and the whole span, place in the span's low-high range, and
     distance from the high and from the 50-session average. `spark`/`dates`
-    reach back CHART_DAYS for the charts; `from90` is where the span starts in
-    them."""
+    reach back CHART_DAYS for the main chart; `from90` is where the span starts
+    in them."""
     start = (now - datetime.timedelta(days=BASELINE_DAYS)).astimezone(NY).date().isoformat()
     span = [s for s in sessions if s["date"] >= start]
     if len(span) < MIN_BASELINE + 1:
@@ -344,6 +343,7 @@ def _price_path(sessions, now, ticker, older=()):
         return round(last - ref, 3) if points else round((last / ref - 1) * 100, 2)
 
     avg = statistics.mean(closes[-AVG_SESSIONS:])
+    chart, chart_dates = _chart(sessions, older, now)
     return {"ticker": ticker, "name": NAMES.get(ticker, ticker),
             "last": round(last, 4), "date": span[-1]["date"],
             "live": span[-1]["live"], "points": points,
@@ -354,15 +354,8 @@ def _price_path(sessions, now, ticker, older=()):
             "off_high": round(last - high, 3) if points else round((last / high - 1) * 100, 2),
             "vs_avg": round(last - avg, 3) if points else round((last / avg - 1) * 100, 2),
             "avg": round(avg, 4),
-            **_chart_fields(sessions, older, now, span[0]["date"], points)}
-
-
-def _chart_fields(sessions, older, now, span_start, points):
-    closes, dates = _chart(sessions, older, now)
-    first, last = closes[0], closes[-1]
-    return {"spark": closes, "dates": dates,
-            "from90": bisect.bisect_left(dates, span_start),
-            "chart_change": round(last - first, 3) if points else round((last / first - 1) * 100, 2)}
+            "spark": chart, "dates": chart_dates,
+            "from90": bisect.bisect_left(chart_dates, span[0]["date"])}
 
 
 def price_history(conn, now):
