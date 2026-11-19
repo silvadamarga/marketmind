@@ -181,6 +181,22 @@ def news_history(conn, now, impact_thr, novelty_thr):
             "metrics": metrics, "strip": strip, "names": names[:10], "categories": cats[:8]}
 
 
+def news_daily(conn, now):
+    """Stories and tone per UTC calendar day over CHART_DAYS, for the main
+    chart. Calendar days, not the 24h windows above, and the count follows how
+    much the site collects (it roughly tripled over the year)."""
+    lo = (now - datetime.timedelta(days=CHART_DAYS)).date().isoformat()
+    rows = conn.execute(
+        """SELECT substr(timestamp, 1, 10) AS d, COUNT(*) AS n,
+                  SUM(sentiment = 'BULLISH') AS up, SUM(sentiment = 'BEARISH') AS down
+           FROM news_events
+           WHERE timestamp >= ?
+             AND COALESCE(json_extract(ai_analysis_json,'$.status'),'OK') != 'FAILED'
+           GROUP BY d ORDER BY d""", (lo,)).fetchall()
+    return [{"date": r["d"], "count": r["n"],
+             "net": round(((r["up"] or 0) - (r["down"] or 0)) / r["n"], 3)} for r in rows]
+
+
 def _sessions(conn, ticker, lo, now):
     """Last close per New York date. Weekends and unchanged days are dropped
     (the poller keeps sampling a closed market, so they repeat the close), and
@@ -465,6 +481,7 @@ def build(conn, now, impact_thr, novelty_thr):
             "price_sessions": PRICE_SESSIONS,
             "chart_days": CHART_DAYS,
             "news": news,
+            "news_daily": news_daily(conn, now),
             "prices": prices,
             "summary": summary(news, prices)}
 

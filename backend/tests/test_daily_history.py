@@ -109,6 +109,16 @@ def test_daily_closes_last_bar_of_each_weekday():
     assert out["SPY"] == [("2026-06-01", 2.0), ("2026-06-08", 3.0)]
 
 
+def test_news_daily_counts_and_tone_per_day():
+    c = _db()
+    _news(c, NOW - dt.timedelta(hours=1), sentiment="BULLISH")
+    _news(c, NOW - dt.timedelta(hours=2), sentiment="BULLISH")
+    _news(c, NOW - dt.timedelta(hours=3), sentiment="BEARISH")
+    _news(c, NOW - dt.timedelta(hours=4))
+    _news(c, NOW - dt.timedelta(days=400))                      # past the chart: left out
+    assert daily_history.news_daily(c, NOW) == [{"date": "2026-11-19", "count": 4, "net": 0.25}]
+
+
 def test_summary_names_and_drops_missing():
     prices = {"spy": {"move": -1.2, "norm": 0.6, "rank": {"below": 55, "of": 60},
                       "date": "2026-11-18", "live": False},

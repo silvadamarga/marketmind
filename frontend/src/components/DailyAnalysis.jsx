@@ -60,20 +60,6 @@ const GROUP_ICON = { Indexes: Layers, 'Rates, credit, dollar': Landmark, Commodi
 const BRIEF_ICON = { 'Fear gauge': Gauge, Sectors: LayoutGrid, '90 days': CalendarRange, News: Newspaper, Attention: Radar };
 const TONE = { up: 'bg-emerald-500/15 text-emerald-400', down: 'bg-red-500/15 text-red-400', flat: 'bg-indigo-500/15 text-indigo-300' };
 
-// Month labels for an x axis: the first index of each new month.
-const monthTicks = (dates) => dates.reduce((acc, d, i) => {
-    const m = d.slice(0, 7);
-    if (i > 0 && m !== dates[i - 1].slice(0, 7)) acc.push({ i, label: asDate(d).toLocaleDateString(undefined, { month: 'short' }) });
-    return acc;
-}, []);
-const Ticks = ({ dates }) => (
-    <div className="relative h-3.5 mt-0.5 text-[10px] text-slate-600">
-        {monthTicks(dates).map((t) => (
-            <span key={t.i} className="absolute -translate-x-1/2" style={{ left: `${(t.i / Math.max(dates.length - 1, 1)) * 100}%` }}>{t.label}</span>
-        ))}
-    </div>
-);
-
 const pathOf = (vals, w, h, lo, hi) => vals
     .map((c, i) => `${(i / Math.max(vals.length - 1, 1)) * w},${hi === lo ? h / 2 : h - ((c - lo) / (hi - lo)) * h}`)
     .join(' ');
@@ -171,66 +157,194 @@ const Tile = ({ icon, label, value, valueCls = 'text-white', sub, v, rank, child
     );
 };
 
-// Price line over the chart span (a year): area, the last 90 days shaded,
-// high/low and 50-day-average guides, month ticks, hover readout.
-const PriceChart = ({ r }) => {
+// The main chart: a year of markets, fear and news on one time axis. Prices
+// are indexed to the start of the chosen range (% change), so assets on very
+// different scales share one axis; VIX and news get their own panes under it.
+// Hues follow the validated categorical order and stay with their asset.
+const MAIN_SERIES = [
+    { t: 'SPY', label: 'S&P 500', color: '#3987e5' },
+    { t: 'GLD', label: 'Gold', color: '#d95926' },
+    { t: 'IWM', label: 'Small caps', color: '#199e70' },
+    { t: 'TLT', label: 'Long bonds', color: '#c98500' },
+    { t: 'USO', label: 'Oil', color: '#d55181' },
+    { t: 'DX-Y.NYB', label: 'Dollar', color: '#0ca30c' },
+    { t: 'QQQ', label: 'Nasdaq 100', color: '#9085e9' },
+    { t: 'BTC-USD', label: 'Bitcoin', color: '#e66767' },
+];
+const MAIN_DEFAULT = ['SPY', 'GLD', 'IWM', 'TLT', 'DX-Y.NYB'];
+const MAIN_KEY = 'dailyBriefing.mainSeries';
+const RANGES = [['1Y', 366], ['6M', 183], ['3M', 92]];
+const DAY = 864e5;
+
+const MainChart = ({ paths, vix, news, from90Date }) => {
+    const [on, setOn] = useState(() => {
+        try {
+            const v = JSON.parse(localStorage.getItem(MAIN_KEY));
+            if (Array.isArray(v) && v.length) return v;
+        } catch { /* storage blocked: use the default */ }
+        return MAIN_DEFAULT;
+    });
+    const [range, setRange] = useState('1Y');
     const [hover, setHover] = useState(null);
     const box = useRef(null);
-    const lo = Math.min(...r.spark), hi = Math.max(...r.spark), H = 100, n = r.spark.length;
-    const from90 = r.from90 ?? 0;
+
+    const rows = Object.fromEntries(paths.flatMap((g) => g.rows).map((r) => [r.ticker, r]));
+    const axis = rows.SPY?.dates;
+    if (!axis || axis.length < 2) return null;
+
+    const toggle = (t) => setOn((cur) => {
+        const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t];
+        try { localStorage.setItem(MAIN_KEY, JSON.stringify(next)); } catch { /* not kept */ }
+        return next;
+    });
+
+    // Range on the trading-day axis; x is calendar time so weekend news lines up.
+    const end = axis[axis.length - 1];
+    const days = RANGES.find((r) => r[0] === range)[1];
+    const startIso = new Date(asDate(end) - days * DAY).toISOString().slice(0, 10);
+    const i0 = Math.max(0, axis.findIndex((d) => d >= startIso));
+    const dates = axis.slice(i0);
+    const n = dates.length;
+    const t0 = asDate(dates[0]).getTime(), t1 = asDate(dates[n - 1]).getTime();
+    const xOf = (iso) => ((asDate(iso).getTime() - t0) / Math.max(t1 - t0, 1)) * 100;
+
+    // A series' value on each axis date, carried forward over its gaps.
+    const align = (srcDates, vals) => {
+        const m = new Map(srcDates.map((d, i) => [d, vals[i]]));
+        let last = null;
+        return axis.map((d) => { if (m.has(d)) last = m.get(d); return last; }).slice(i0);
+    };
+    const series = MAIN_SERIES.filter((s) => rows[s.t]).map((s) => {
+        const vals = align(rows[s.t].dates, rows[s.t].spark);
+        const base = vals.find((v) => v !== null);
+        return { ...s, pct: vals.map((v) => (v === null || !base ? null : (v / base - 1) * 100)) };
+    });
+    const shown = series.filter((s) => on.includes(s.t));
+    const all = shown.flatMap((s) => s.pct).filter((v) => v !== null);
+    const lo = Math.min(0, ...all), hi = Math.max(0, ...all);
+    const H = 100;
     const y = (v) => (hi === lo ? 50 : H - ((v - lo) / (hi - lo)) * H);
-    const x = (i) => (i / Math.max(n - 1, 1)) * 100;
-    const line = pathOf(r.spark, 100, H, lo, hi);
+    const line = (pct) => pct.map((v, i) => (v === null ? null : `${xOf(dates[i])},${y(v)}`)).filter(Boolean).join(' ');
+
+    const vixVals = vix?.spark ? align(vix.dates, vix.spark) : [];
+    const vixNum = vixVals.filter((v) => v !== null);
+    const vLo = Math.min(...vixNum, vix?.median ?? Infinity), vHi = Math.max(...vixNum, vix?.median ?? -Infinity);
+    const vy = (v) => (vHi === vLo ? 50 : 100 - ((v - vLo) / (vHi - vLo)) * 100);
+
+    const newsIn = (news || []).filter((d) => d.date >= dates[0] && d.date <= dates[n - 1]);
+    const maxCount = Math.max(1, ...newsIn.map((d) => d.count));
+    const nets = newsIn.map((d) => d.net).sort((a, b) => a - b);
+    const midNet = nets.length ? nets[Math.floor(nets.length / 2)] : 0;
+    const barW = 100 / Math.max((t1 - t0) / DAY + 1, 1);
+
     const idx = hover ?? n - 1;
+    const hDate = dates[idx];
+    const hNews = (news || []).find((d) => d.date === hDate);
     const onMove = (e) => {
         const rect = box.current.getBoundingClientRect();
-        const f = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-        setHover(Math.round(f * (n - 1)));
+        const t = t0 + Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * (t1 - t0);
+        let best = 0;
+        dates.forEach((d, i) => { if (Math.abs(asDate(d).getTime() - t) < Math.abs(asDate(dates[best]).getTime() - t)) best = i; });
+        setHover(best);
     };
-    const fromFirst = (r.spark[idx] / r.spark[0] - 1) * 100;
+    const ticks = dates.reduce((acc, d, i) => {
+        if (i > 0 && d.slice(0, 7) !== dates[i - 1].slice(0, 7)) acc.push({ d, label: asDate(d).toLocaleDateString(undefined, { month: 'short' }) });
+        return acc;
+    }, []);
+    // Shade the 90-day window only when the range reaches well past it.
+    const shade = from90Date && from90Date > dates[Math.min(10, n - 1)] ? xOf(from90Date) : null;
+    const cross = hover !== null ? <div className="absolute inset-y-0 w-px bg-slate-500/70 pointer-events-none" style={{ left: `${xOf(hDate)}%` }} /> : null;
+    const paneLabel = 'absolute left-1 top-0.5 text-[10px] text-slate-400 bg-[#131b2e]/80 px-1 rounded pointer-events-none';
+
     return (
-        <div className={`${card} p-3 flex flex-col`}>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide"><LineChart size={13} />{r.name}, {spanLabel(r.dates)}</span>
-                <span className="text-sm tabular-nums">
-                    <span className="text-white font-semibold">{fmtPrice(r.spark[idx])}</span>
-                    <span className={`ml-2 ${upDown(fromFirst)}`}>{signed(fromFirst, 1)}%</span>
-                    <span className="text-slate-500 ml-2">{shortDay(r.dates[idx])}</span>
-                </span>
-            </div>
-            <div className="flex gap-2 mt-2 flex-1 min-h-[9rem]">
-                <div ref={box} className="relative flex-1 cursor-crosshair" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-                    <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
-                        <defs>
-                            <linearGradient id="spyFill" x1="0" x2="0" y1="0" y2="1">
-                                <stop offset="0%" stopColor="#818cf8" stopOpacity="0.35" />
-                                <stop offset="100%" stopColor="#818cf8" stopOpacity="0" />
-                            </linearGradient>
-                        </defs>
-                        {from90 > 0 && <rect x={x(from90)} y="0" width={100 - x(from90)} height={H} className="fill-slate-400/[0.07]" />}
-                        <polygon points={`0,${H} ${line} 100,${H}`} fill="url(#spyFill)" />
-                        {[hi, lo].map((v) => <line key={v} x1="0" x2="100" y1={y(v)} y2={y(v)} vectorEffect="non-scaling-stroke" strokeDasharray="3 3" strokeWidth="1" className="stroke-slate-600" />)}
-                        <line x1="0" x2="100" y1={y(r.avg)} y2={y(r.avg)} vectorEffect="non-scaling-stroke" strokeWidth="1" className="stroke-amber-500/70" />
-                        <polyline points={line} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="2" className="stroke-indigo-400" />
-                        {hover !== null && <line x1={x(idx)} x2={x(idx)} y1="0" y2={H} vectorEffect="non-scaling-stroke" strokeWidth="1" className="stroke-slate-500" />}
-                    </svg>
-                    <span className="absolute w-2.5 h-2.5 -ml-[5px] -mt-[5px] rounded-full bg-indigo-400 ring-2 ring-[#131b2e]" style={{ left: `${x(idx)}%`, top: `${y(r.spark[idx])}%` }} />
-                    {from90 > 0 && <span className="absolute bottom-0 pl-1 text-[10px] text-slate-500 pointer-events-none" style={{ left: `${x(from90)}%` }}>last 90 days</span>}
+        <Panel icon={LineChart} title="The year at a glance"
+            note={<span className="flex gap-1">{RANGES.map(([k]) => (
+                <button key={k} onClick={() => setRange(k)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${range === k ? 'bg-indigo-500/30 text-indigo-200' : 'text-slate-500 hover:text-slate-300'}`}>{k}</button>
+            ))}</span>}>
+            <div className="px-3 pb-3">
+                {/* Legend and readout: click to show or hide; values at the hovered day */}
+                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    <span className="text-[11px] text-slate-400 tabular-nums mr-1 w-24">{shortDay(hDate)}</span>
+                    {series.map((s) => {
+                        const v = s.pct[idx];
+                        const active = on.includes(s.t);
+                        return (
+                            <button key={s.t} onClick={() => toggle(s.t)} title={`${rows[s.t].name}: click to ${active ? 'hide' : 'show'}`}
+                                className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] tabular-nums transition-colors ${active ? 'border-slate-600 bg-slate-800/60 text-slate-200' : 'border-slate-800 text-slate-500'}`}>
+                                <span className="w-2.5 h-2.5 rounded-full" style={{ background: active ? s.color : 'transparent', boxShadow: `inset 0 0 0 1.5px ${s.color}` }} />
+                                {s.label}
+                                {active && <span className="text-slate-400">{signed(v, 1)}%</span>}
+                            </button>
+                        );
+                    })}
                 </div>
-                {/* y axis: high, 50-day average, low */}
-                <div className="relative w-12 text-[10px] tabular-nums">
-                    <span className="absolute -translate-y-1/2 text-slate-500" style={{ top: `${y(hi)}%` }}>{fmtPrice(hi)}</span>
-                    <span className="absolute -translate-y-1/2 text-amber-500/80" style={{ top: `${y(r.avg)}%` }}>{fmtPrice(r.avg)}</span>
-                    <span className="absolute -translate-y-1/2 text-slate-500" style={{ top: `${y(lo)}%` }}>{fmtPrice(lo)}</span>
+
+                <div ref={box} className="relative cursor-crosshair select-none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+                    {/* Prices, % change since the range start */}
+                    <div className="flex gap-2">
+                        <div className="relative flex-1 h-48">
+                            <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
+                                {shade !== null && <rect x={shade} y="0" width={100 - shade} height={H} className="fill-slate-400/[0.06]" />}
+                                <line x1="0" x2="100" y1={y(0)} y2={y(0)} vectorEffect="non-scaling-stroke" strokeDasharray="3 3" strokeWidth="1" className="stroke-slate-600" />
+                                {shown.map((s) => (
+                                    <polyline key={s.t} points={line(s.pct)} fill="none" stroke={s.color} strokeWidth="1.75" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                                ))}
+                            </svg>
+                            {shown.map((s) => s.pct[idx] !== null && (
+                                <span key={s.t} className="absolute w-2 h-2 -ml-1 -mt-1 rounded-full ring-2 ring-[#131b2e] pointer-events-none" style={{ left: `${xOf(hDate)}%`, top: `${y(s.pct[idx])}%`, background: s.color }} />
+                            ))}
+                            {shade !== null && <span className="absolute top-0.5 pl-1 text-[10px] text-slate-500 pointer-events-none" style={{ left: `${shade}%` }}>last 90 days</span>}
+                            {cross}
+                        </div>
+                        <div className="relative w-10 h-48 text-[10px] tabular-nums text-slate-500">
+                            <span className="absolute -translate-y-1/2" style={{ top: `${y(hi)}%` }}>{signed(hi, 0)}%</span>
+                            {hi > 0 && lo < 0 && <span className="absolute -translate-y-1/2" style={{ top: `${y(0)}%` }}>0%</span>}
+                            <span className="absolute -translate-y-1/2" style={{ top: `${y(lo)}%` }}>{signed(lo, 0)}%</span>
+                        </div>
+                    </div>
+
+                    {/* VIX level, dashed = its normal */}
+                    {vixNum.length > 1 && (
+                        <div className="flex gap-2 mt-2">
+                            <div className="relative flex-1 h-12 border-t border-slate-800">
+                                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
+                                    {vix?.median && <line x1="0" x2="100" y1={vy(vix.median)} y2={vy(vix.median)} vectorEffect="non-scaling-stroke" strokeDasharray="2 2" strokeWidth="1" className="stroke-slate-500" />}
+                                    <polyline points={vixVals.map((v, i) => (v === null ? null : `${xOf(dates[i])},${vy(v)}`)).filter(Boolean).join(' ')}
+                                        fill="none" vectorEffect="non-scaling-stroke" strokeWidth="1.5" className="stroke-slate-300" />
+                                </svg>
+                                <span className={paneLabel}>VIX {vixVals[idx] !== null ? vixVals[idx].toFixed(1) : '—'} <span className="text-slate-500">· normal {vix?.median}</span></span>
+                                {cross}
+                            </div>
+                            <div className="w-10" />
+                        </div>
+                    )}
+
+                    {/* Stories per day; color = tone above or below its usual */}
+                    {newsIn.length > 1 && (
+                        <div className="flex gap-2 mt-1">
+                            <div className="relative flex-1 h-10 border-t border-slate-800">
+                                {newsIn.map((d) => (
+                                    <div key={d.date} className={`absolute bottom-0 ${d.net >= midNet ? 'bg-emerald-500/60' : 'bg-red-500/60'}`}
+                                        style={{ left: `${xOf(d.date)}%`, width: `${barW}%`, height: `${(d.count / maxCount) * 100}%` }} />
+                                ))}
+                                <span className={paneLabel}>Stories {hNews ? hNews.count : '—'} <span className="text-slate-500">· tone {hNews ? signed(hNews.net * 100, 0) : '—'}</span></span>
+                                {cross}
+                            </div>
+                            <div className="w-10" />
+                        </div>
+                    )}
                 </div>
+
+                <div className="relative h-3.5 mt-0.5 mr-12 text-[10px] text-slate-600">
+                    {ticks.map((t) => <span key={t.d} className="absolute -translate-x-1/2" style={{ left: `${xOf(t.d)}%` }}>{t.label}</span>)}
+                </div>
+                <p className="text-[10px] text-slate-600 mt-1">
+                    Lines: % change since {shortDay(dates[0])}. Stories: green = tone above its usual for the period, red = below.
+                    Story counts follow how much the site collects, which grew over the year.
+                </p>
             </div>
-            <div className="mr-14"><Ticks dates={r.dates} /></div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-                <span><span className={upDown(r.chart_change)}>{chg(r.chart_change, r.points)}</span> over {spanLabel(r.dates)}</span>
-                <span><span className={upDown(r.span)}>{chg(r.span, r.points)}</span> over 90 days, {chg(r.off_high, r.points)} from its high</span>
-                <span><span className="inline-block w-3 h-px bg-amber-500 align-middle mr-1" />{chg(r.vs_avg, r.points)} vs 50-day avg</span>
-            </div>
-        </div>
+        </Panel>
     );
 };
 
@@ -476,29 +590,27 @@ export default function DailyAnalysis() {
                     </Tile>
                 </div>
 
-                {/* The day in short lines, next to the S&P 500's last 90 days */}
-                {(h?.summary?.length > 0 || spyPath) && (
-                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
-                        {h?.summary?.length > 0 && (
-                            <Panel icon={Sparkles} title="The day in brief" className={`${spyPath ? 'lg:col-span-3' : 'lg:col-span-5'} bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30`}>
-                                <div className="px-3 pb-3 space-y-2">
-                                    {h.summary.map((x) => {
-                                        const Icon = x.topic === 'Stocks' ? (x.tone === 'down' ? TrendingDown : TrendingUp) : (BRIEF_ICON[x.topic] || Sparkles);
-                                        return (
-                                            <div key={x.topic} className="flex gap-2.5 items-start">
-                                                <span className={`shrink-0 h-6 w-6 rounded-md flex items-center justify-center ${TONE[x.tone] || TONE.flat}`}><Icon size={13} /></span>
-                                                <p className="text-sm text-slate-200 leading-snug pt-0.5">
-                                                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mr-1.5">{x.topic}</span>{x.text}
-                                                </p>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </Panel>
-                        )}
-                        {spyPath && <div className={h?.summary?.length > 0 ? 'lg:col-span-2 flex' : 'lg:col-span-5 flex'}><div className="flex-1 min-w-0 flex flex-col [&>div]:flex-1"><PriceChart r={spyPath} /></div></div>}
-                    </div>
+                {/* The day in short lines */}
+                {h?.summary?.length > 0 && (
+                    <Panel icon={Sparkles} title="The day in brief" className="bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30">
+                        <div className="px-3 pb-3 grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-2">
+                            {h.summary.map((x) => {
+                                const Icon = x.topic === 'Stocks' ? (x.tone === 'down' ? TrendingDown : TrendingUp) : (BRIEF_ICON[x.topic] || Sparkles);
+                                return (
+                                    <div key={x.topic} className="flex gap-2.5 items-start">
+                                        <span className={`shrink-0 h-6 w-6 rounded-md flex items-center justify-center ${TONE[x.tone] || TONE.flat}`}><Icon size={13} /></span>
+                                        <p className="text-sm text-slate-200 leading-snug pt-0.5">
+                                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mr-1.5">{x.topic}</span>{x.text}
+                                        </p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </Panel>
                 )}
+
+                {/* Markets, fear and news over the year, on one time axis */}
+                {spyPath && <MainChart paths={groups} vix={vix} news={h?.news_daily} from90Date={spyPath.dates[spyPath.from90]} />}
 
                 {/* Markets: everything else, then sectors */}
                 {groups.length > 0 && (
