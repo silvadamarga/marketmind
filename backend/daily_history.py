@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 BASELINE_DAYS = 90          # windows compared against today
 MIN_BASELINE = 5            # fewer like-days than this -> no verdict
 PRICE_SESSIONS = 60         # sessions in a price baseline (~90 calendar days)
+CHART_DAYS = 365            # charts reach this far back; every verdict stays on the 90 days
 UNUSUAL_MIN_COUNT = 3       # a name needs this many mentions today to be "unusual"
 UNUSUAL_RATIO = 3.0         # ... and this many times its daily average
 RATIO_FLOOR = 0.5           # daily average floor, so a first mention isn't "inf x"
@@ -210,6 +211,57 @@ def _sessions(conn, ticker, lo, now):
     return out
 
 
+def _daily_closes(conn, lo, hi):
+    """One close per weekday per ticker, lo <= date < hi, for the chart's older
+    stretch only: the last bar of each UTC date (~19:00 New York, after the
+    close). One pass over market_data for every ticker, where _sessions would
+    parse a year of 15-minute bars per ticker. Unchanged closes are dropped as
+    in _sessions."""
+    rows = conn.execute(
+        "SELECT ticker, substr(timestamp, 1, 10) AS d, close, max(timestamp) "
+        "FROM market_data WHERE timestamp >= ? AND timestamp < ? AND close IS NOT NULL "
+        "GROUP BY ticker, d ORDER BY ticker, d", (lo, hi)).fetchall()
+    out = {}
+    for r in rows:
+        try:
+            if datetime.date.fromisoformat(r["d"]).weekday() >= 5:
+                continue
+        except ValueError:
+            continue
+        series = out.setdefault(r["ticker"], [])
+        if not series or series[-1][1] != r["close"]:
+            series.append((r["d"], r["close"]))
+    return out
+
+
+SPLIT_TOL = 0.02            # a one-day ratio this close to 1/k or k (k=2..10) is a split
+
+
+def _split_factor(ratio):
+    for k in range(2, 11):
+        for f in (1 / k, k):
+            if abs(ratio / f - 1) <= SPLIT_TOL:
+                return f
+    return None
+
+
+def _chart(sessions, older, now):
+    """Closes and dates for the last CHART_DAYS: the older daily closes, then
+    the sessions. market_data stores raw prices, so a split (five sector funds
+    split 2-for-1 on 2025-12-05) shows as a cliff; closes before one are scaled
+    by its ratio."""
+    first = sessions[0]["date"] if sessions else None
+    start = (now - datetime.timedelta(days=CHART_DAYS)).astimezone(NY).date().isoformat()
+    pts = [(d, c) for d, c in older if d >= start and (first is None or d < first)]
+    pts += [(s["date"], s["close"]) for s in sessions if s["date"] >= start]
+    closes = [c for _, c in pts]
+    for i in range(len(closes) - 1, 0, -1):
+        f = _split_factor(closes[i] / closes[i - 1]) if closes[i - 1] else None
+        if f:
+            closes[:i] = [c * f for c in closes[:i]]
+    return [round(c, 4) for c in closes], [d for d, _ in pts]
+
+
 def _move_vs_norm(sessions):
     moves = [s["move"] for s in sessions if s["move"] is not None]
     if len(moves) < MIN_BASELINE + 1:
@@ -223,10 +275,12 @@ def _move_vs_norm(sessions):
             "live": sessions[-1]["live"]}
 
 
-def _price_path(sessions, now, ticker):
+def _price_path(sessions, now, ticker, older=()):
     """Where a price sits against its own last BASELINE_DAYS: returns over 1
     week, 1 month and the whole span, place in the span's low-high range, and
-    distance from the high and from the 50-session average."""
+    distance from the high and from the 50-session average. `spark`/`dates`
+    reach back CHART_DAYS for the charts; `from90` is where the span starts in
+    them."""
     start = (now - datetime.timedelta(days=BASELINE_DAYS)).astimezone(NY).date().isoformat()
     span = [s for s in sessions if s["date"] >= start]
     if len(span) < MIN_BASELINE + 1:
@@ -252,12 +306,20 @@ def _price_path(sessions, now, ticker):
             "off_high": round(last - high, 3) if points else round((last / high - 1) * 100, 2),
             "vs_avg": round(last - avg, 3) if points else round((last / avg - 1) * 100, 2),
             "avg": round(avg, 4),
-            "spark": [round(c, 4) for c in closes],
-            "dates": [x["date"] for x in span]}
+            **_chart_fields(sessions, older, now, span[0]["date"], points)}
+
+
+def _chart_fields(sessions, older, now, span_start, points):
+    closes, dates = _chart(sessions, older, now)
+    first, last = closes[0], closes[-1]
+    return {"spark": closes, "dates": dates,
+            "from90": bisect.bisect_left(dates, span_start),
+            "chart_change": round(last - first, 3) if points else round((last / first - 1) * 100, 2)}
 
 
 def price_history(conn, now):
     lo = (now - datetime.timedelta(days=BASELINE_DAYS + 10)).isoformat()
+    older = _daily_closes(conn, (now - datetime.timedelta(days=CHART_DAYS + 5)).date().isoformat(), lo[:10])
     cache = {}
 
     def sessions(t):
@@ -277,6 +339,7 @@ def price_history(conn, now):
                       "low": round(min(levels), 2), "high": round(max(levels), 2),
                       "rank": _rank_line(vix[-1]["close"], levels),
                       "date": vix[-1]["date"], "live": vix[-1]["live"]}
+        out["vix"]["spark"], out["vix"]["dates"] = _chart(vix, older.get("^VIX", ()), now)
 
     for t in SECTOR_TICKERS:
         m = _move_vs_norm(sessions(t))
@@ -290,7 +353,7 @@ def price_history(conn, now):
 
     out["paths"] = []
     for group, tickers in ASSET_GROUPS:
-        rows = [r for r in (_price_path(sessions(t), now, t) for t in tickers) if r]
+        rows = [r for r in (_price_path(sessions(t), now, t, older.get(t, ())) for t in tickers) if r]
         if rows:
             out["paths"].append({"group": group, "rows": rows})
     return out
@@ -400,6 +463,7 @@ def build(conn, now, impact_thr, novelty_thr):
     return {"as_of": now.isoformat(),
             "baseline_days": BASELINE_DAYS,
             "price_sessions": PRICE_SESSIONS,
+            "chart_days": CHART_DAYS,
             "news": news,
             "prices": prices,
             "summary": summary(news, prices)}

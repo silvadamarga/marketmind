@@ -78,9 +78,36 @@ def test_price_path_returns_and_range():
     r = daily_history._price_path(sess, NOW, "SPY")
     assert r["pos"] == 1.0 and r["off_high"] == 0.0        # straight line up: at the high
     assert r["w1"] == round((sess[-1]["close"] / sess[-6]["close"] - 1) * 100, 2)
-    assert sess[0]["date"] < r["dates"][0]                    # trimmed to the 90-day span
+    assert sess[0]["date"] < r["dates"][r["from90"]]          # stats trimmed to the 90-day span
+    assert r["dates"][0] == sess[0]["date"]                   # the chart keeps the older sessions
     y = daily_history._price_path(sess, NOW, "^TNX")
     assert y["points"] and y["d1"] == 1.0                     # yields move in points
+
+def test_chart_puts_older_daily_closes_first():
+    sess = [{"date": "2026-11-17", "close": 10.0, "live": False},
+            {"date": "2026-11-18", "close": 11.0, "live": False}]
+    older = [("2025-11-01", 5.0), ("2026-06-01", 8.0), ("2026-11-17", 99.0)]
+    closes, dates = daily_history._chart(sess, older, NOW)
+    assert dates == ["2026-06-01", "2026-11-17", "2026-11-18"]  # past CHART_DAYS and overlap dropped
+    assert closes == [8.0, 10.0, 11.0]
+
+
+def test_chart_scales_closes_before_a_split():
+    older = [("2025-12-03", 90.0), ("2025-12-04", 92.0), ("2025-12-05", 46.5), ("2026-01-30", 33.0)]
+    closes, _ = daily_history._chart([], older, NOW)
+    assert closes == [45.0, 46.0, 46.5, 33.0]                # 2-for-1 scaled; a real -29% day kept
+
+
+def test_daily_closes_last_bar_of_each_weekday():
+    c = _db()
+    for ts, close in (("2026-06-01T15:00:00", 1.0), ("2026-06-01T23:50:00", 2.0),   # Mon: last bar wins
+                      ("2026-06-02T23:50:00", 2.0),                                  # unchanged: dropped
+                      ("2026-06-06T23:50:00", 7.0),                                  # Saturday: dropped
+                      ("2026-06-08T23:50:00", 3.0)):
+        c.execute("INSERT INTO market_data VALUES (?,?,?)", (ts, "SPY", close))
+    out = daily_history._daily_closes(c, "2026-05-01", "2026-07-01")
+    assert out["SPY"] == [("2026-06-01", 2.0), ("2026-06-08", 3.0)]
+
 
 def test_summary_names_and_drops_missing():
     prices = {"spy": {"move": -1.2, "norm": 0.6, "rank": {"below": 55, "of": 60},
