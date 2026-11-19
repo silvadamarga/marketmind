@@ -21,6 +21,7 @@ const signed = (v, d = 1) => {
 const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
 const asDate = (iso) => new Date(`${iso}T12:00:00Z`);
 const shortDay = (iso) => asDate(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const fullDay = (iso) => asDate(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 const timeOf = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 // VIX carries no `at` stamp, so a live read without one is just "today".
 const whenOf = (p) => (p.live ? (p.at ? `today ${timeOf(p.at)}` : 'today') : `${shortDay(p.date)} close`);
@@ -157,30 +158,29 @@ const Tile = ({ icon, label, value, valueCls = 'text-white', sub, v, rank, child
     );
 };
 
-// The main chart: a year of markets, fear and news on one time axis. Prices
+// The main chart: markets, sectors, fear and news on one time axis. Prices
 // are indexed to the start of the chosen range (% change), so assets on very
 // different scales share one axis; VIX and news get their own panes under it.
-// Hues follow the validated categorical order and stay with their asset.
-const MAIN_SERIES = [
-    { t: 'SPY', label: 'S&P 500', color: '#3987e5' },
-    { t: 'GLD', label: 'Gold', color: '#d95926' },
-    { t: 'IWM', label: 'Small caps', color: '#199e70' },
-    { t: 'TLT', label: 'Long bonds', color: '#c98500' },
-    { t: 'USO', label: 'Oil', color: '#d55181' },
-    { t: 'DX-Y.NYB', label: 'Dollar', color: '#0ca30c' },
-    { t: 'QQQ', label: 'Nasdaq 100', color: '#9085e9' },
-    { t: 'BTC-USD', label: 'Bitcoin', color: '#e66767' },
+// At most eight lines at once, one per slot of the validated categorical
+// order: a line keeps its hue while it is shown, and a newly shown line takes
+// the first free slot. 5Y reaches back with the forge's daily closes (SPY and
+// the sector funds only); the other markets have one year.
+const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c', '#9085e9', '#e66767'];
+const MARKETS = [
+    { t: 'SPY', label: 'S&P 500' }, { t: 'QQQ', label: 'Nasdaq 100' }, { t: 'IWM', label: 'Small caps' },
+    { t: 'TLT', label: 'Long bonds' }, { t: 'JNK', label: 'Junk bonds' }, { t: 'DX-Y.NYB', label: 'Dollar' },
+    { t: 'GLD', label: 'Gold' }, { t: 'SLV', label: 'Silver' }, { t: 'USO', label: 'Oil' }, { t: 'BTC-USD', label: 'Bitcoin' },
 ];
-const MAIN_DEFAULT = ['SPY', 'GLD', 'IWM', 'TLT', 'DX-Y.NYB'];
-const MAIN_KEY = 'dailyBriefing.mainSeries';
-const RANGES = [['1Y', 366], ['6M', 183], ['3M', 92]];
+const MAIN_DEFAULT = { SPY: 0, GLD: 1, IWM: 2, TLT: 3, 'DX-Y.NYB': 5 };
+const MAIN_KEY = 'dailyBriefing.mainSlots';
+const RANGES = [['5Y', 1830], ['1Y', 366], ['6M', 183], ['3M', 92]];
 const DAY = 864e5;
 
 const MainChart = ({ paths, vix, news, from90Date }) => {
-    const [on, setOn] = useState(() => {
+    const [slots, setSlots] = useState(() => {
         try {
             const v = JSON.parse(localStorage.getItem(MAIN_KEY));
-            if (Array.isArray(v) && v.length) return v;
+            if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) return v;
         } catch { /* storage blocked: use the default */ }
         return MAIN_DEFAULT;
     });
@@ -189,14 +189,25 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
     const box = useRef(null);
 
     const rows = Object.fromEntries(paths.flatMap((g) => g.rows).map((r) => [r.ticker, r]));
-    const axis = rows.SPY?.dates;
-    if (!axis || axis.length < 2) return null;
+    if (!rows.SPY || rows.SPY.dates.length < 2) return null;
+    const long = (r) => (r.long_dates ? { dates: [...r.long_dates, ...r.dates], vals: [...r.long, ...r.spark] } : { dates: r.dates, vals: r.spark });
+    const has5y = Boolean(rows.SPY.long_dates);
+    const five = range === '5Y' && has5y;
+    const axis = five ? long(rows.SPY).dates : rows.SPY.dates;
+    const full = (t) => (five ? !!rows[t].long_dates : true);   // has data for the whole range
 
-    const toggle = (t) => setOn((cur) => {
-        const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t];
+    const toggle = (t) => setSlots((cur) => {
+        const next = { ...cur };
+        if (t in next) delete next[t];
+        else {
+            const free = PALETTE.findIndex((_, i) => !Object.values(next).includes(i));
+            if (free < 0) return cur;
+            next[t] = free;
+        }
         try { localStorage.setItem(MAIN_KEY, JSON.stringify(next)); } catch { /* not kept */ }
         return next;
     });
+    const full8 = Object.keys(slots).length >= PALETTE.length;
 
     // Range on the trading-day axis; x is calendar time so weekend news lines up.
     const end = axis[axis.length - 1];
@@ -214,12 +225,19 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
         let last = null;
         return axis.map((d) => { if (m.has(d)) last = m.get(d); return last; }).slice(i0);
     };
-    const series = MAIN_SERIES.filter((s) => rows[s.t]).map((s) => {
-        const vals = align(rows[s.t].dates, rows[s.t].spark);
+    const sectorRows = paths.find((g) => g.group === 'Sectors')?.rows || [];
+    const groupsOf = [
+        ['Markets', MARKETS.filter((m) => rows[m.t])],
+        ['Sectors', sectorRows.map((r) => ({ t: r.ticker, label: r.name }))],
+    ];
+    const series = groupsOf.flatMap(([, list]) => list).map((s) => {
+        const src = long(rows[s.t]);
+        const vals = full(s.t) ? align(src.dates, src.vals) : [];
         const base = vals.find((v) => v !== null);
-        return { ...s, pct: vals.map((v) => (v === null || !base ? null : (v / base - 1) * 100)) };
+        return { ...s, color: PALETTE[slots[s.t]], pct: vals.map((v) => (v === null || !base ? null : (v / base - 1) * 100)) };
     });
-    const shown = series.filter((s) => on.includes(s.t));
+    const byT = Object.fromEntries(series.map((s) => [s.t, s]));
+    const shown = series.filter((s) => s.t in slots && full(s.t));
     const all = shown.flatMap((s) => s.pct).filter((v) => v !== null);
     const lo = Math.min(0, ...all), hi = Math.max(0, ...all);
     const H = 100;
@@ -247,8 +265,12 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
         dates.forEach((d, i) => { if (Math.abs(asDate(d).getTime() - t) < Math.abs(asDate(dates[best]).getTime() - t)) best = i; });
         setHover(best);
     };
+    // Month labels, or year labels when the range spans years.
+    const unit = five ? 4 : 7;
     const ticks = dates.reduce((acc, d, i) => {
-        if (i > 0 && d.slice(0, 7) !== dates[i - 1].slice(0, 7)) acc.push({ d, label: asDate(d).toLocaleDateString(undefined, { month: 'short' }) });
+        if (i > 0 && d.slice(0, unit) !== dates[i - 1].slice(0, unit)) {
+            acc.push({ d, label: five ? d.slice(0, 4) : asDate(d).toLocaleDateString(undefined, { month: 'short' }) });
+        }
         return acc;
     }, []);
     // Shade the 90-day window only when the range reaches well past it.
@@ -257,27 +279,34 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
     const paneLabel = 'absolute left-1 top-0.5 text-[10px] text-slate-400 bg-[#131b2e]/80 px-1 rounded pointer-events-none';
 
     return (
-        <Panel icon={LineChart} title="The year at a glance"
-            note={<span className="flex gap-1">{RANGES.map(([k]) => (
+        <Panel icon={LineChart} title="Markets over time"
+            note={<span className="flex gap-1">{RANGES.filter(([k]) => k !== '5Y' || has5y).map(([k]) => (
                 <button key={k} onClick={() => setRange(k)}
                     className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${range === k ? 'bg-indigo-500/30 text-indigo-200' : 'text-slate-500 hover:text-slate-300'}`}>{k}</button>
             ))}</span>}>
             <div className="px-3 pb-3">
                 {/* Legend and readout: click to show or hide; values at the hovered day */}
-                <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                    <span className="text-[11px] text-slate-400 tabular-nums mr-1 w-24">{shortDay(hDate)}</span>
-                    {series.map((s) => {
-                        const v = s.pct[idx];
-                        const active = on.includes(s.t);
-                        return (
-                            <button key={s.t} onClick={() => toggle(s.t)} title={`${rows[s.t].name}: click to ${active ? 'hide' : 'show'}`}
-                                className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] tabular-nums transition-colors ${active ? 'border-slate-600 bg-slate-800/60 text-slate-200' : 'border-slate-800 text-slate-500'}`}>
-                                <span className="w-2.5 h-2.5 rounded-full" style={{ background: active ? s.color : 'transparent', boxShadow: `inset 0 0 0 1.5px ${s.color}` }} />
-                                {s.label}
-                                {active && <span className="text-slate-400">{signed(v, 1)}%</span>}
-                            </button>
-                        );
-                    })}
+                <div className="space-y-1.5 mb-2">
+                    {groupsOf.map(([group, list]) => (
+                        <div key={group} className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 w-14 shrink-0">{group}</span>
+                            {list.map(({ t }) => {
+                                const sr = byT[t];
+                                const active = t in slots;
+                                const ok = full(t);
+                                const why = !ok ? 'only one year of data' : active ? 'click to hide' : full8 ? '8 lines at most: hide one first' : 'click to show';
+                                return (
+                                    <button key={t} onClick={() => ok && (active || !full8) && toggle(t)} title={`${rows[t].name}: ${why}`}
+                                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] tabular-nums transition-colors ${active && ok ? 'border-slate-600 bg-slate-800/60 text-slate-200' : 'border-slate-800 text-slate-500'} ${!ok || (!active && full8) ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                                        <span className="w-2.5 h-2.5 rounded-full" style={active ? { background: sr.color } : { boxShadow: 'inset 0 0 0 1.5px #64748b' }} />
+                                        {sr.label}
+                                        {active && ok && <span className="text-slate-400">{signed(sr.pct[idx], 1)}%</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ))}
+                    <div className="text-[11px] text-slate-400 tabular-nums">{five ? fullDay(hDate) : shortDay(hDate)}{five && <span className="text-slate-500"> · 5Y: weekly before {fullDay(rows.SPY.dates[0])}; S&P 500 and sectors only</span>}</div>
                 </div>
 
                 <div ref={box} className="relative cursor-crosshair select-none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
@@ -294,7 +323,7 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
                             {shown.map((s) => s.pct[idx] !== null && (
                                 <span key={s.t} className="absolute w-2 h-2 -ml-1 -mt-1 rounded-full ring-2 ring-[#131b2e] pointer-events-none" style={{ left: `${xOf(hDate)}%`, top: `${y(s.pct[idx])}%`, background: s.color }} />
                             ))}
-                            {shade !== null && <span className="absolute top-0.5 pl-1 text-[10px] text-slate-500 pointer-events-none" style={{ left: `${shade}%` }}>last 90 days</span>}
+                            {shade !== null && shade < 85 && <span className="absolute top-0.5 pl-1 text-[10px] text-slate-500 whitespace-nowrap pointer-events-none" style={{ left: `${shade}%` }}>last 90 days</span>}
                             {cross}
                         </div>
                         <div className="relative w-10 h-48 text-[10px] tabular-nums text-slate-500">
@@ -340,7 +369,7 @@ const MainChart = ({ paths, vix, news, from90Date }) => {
                     {ticks.map((t) => <span key={t.d} className="absolute -translate-x-1/2" style={{ left: `${xOf(t.d)}%` }}>{t.label}</span>)}
                 </div>
                 <p className="text-[10px] text-slate-600 mt-1">
-                    Lines: % change since {shortDay(dates[0])}. Stories: green = tone above its usual for the period, red = below.
+                    Lines: % change since {fullDay(dates[0])}; up to 8 at once. Stories: green = tone above its usual for the period, red = below.
                     Story counts follow how much the site collects, which grew over the year.
                 </p>
             </div>

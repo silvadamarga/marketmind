@@ -18,6 +18,7 @@ import bisect
 import datetime
 import json
 import statistics
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASELINE_DAYS = 90          # windows compared against today
@@ -250,6 +251,37 @@ def _daily_closes(conn, lo, hi):
     return out
 
 
+# Five years of daily closes the forge pushes (`scrape export-history --push`):
+# SPY and the sector funds. Spliced before the VPS's own year, weekly.
+FORGE_HISTORY = Path(__file__).with_name("forge_history.json")
+
+
+def _forge_closes(path=FORGE_HISTORY):
+    try:
+        return json.loads(path.read_text())["closes"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def _long(row, forge_pts):
+    """The forge's closes before the row's chart, one per ISO week (its last
+    session), scaled so the forge close on the chart's first day matches the
+    VPS one: forge closes are split-adjusted, and the VPS's are its own."""
+    first = row["dates"][0]
+    at = [c for d, c in forge_pts if d <= first]
+    if not at or not at[-1]:
+        return None
+    k = row["spark"][0] / at[-1]
+    weeks = {}
+    for d, c in forge_pts:
+        if d < first:
+            weeks[datetime.date.fromisoformat(d).isocalendar()[:2]] = (d, c)
+    if not weeks:
+        return None
+    pts = sorted(weeks.values())
+    return {"long": [round(c * k, 4) for _, c in pts], "long_dates": [d for d, _ in pts]}
+
+
 SPLIT_TOL = 0.02            # a one-day ratio this close to 1/k or k (k=2..10) is a split
 
 
@@ -368,8 +400,12 @@ def price_history(conn, now):
                     for s in spy[-PRICE_SESSIONS - 1:] if s["move"] is not None]
 
     out["paths"] = []
+    forge = _forge_closes()
     for group, tickers in ASSET_GROUPS:
         rows = [r for r in (_price_path(sessions(t), now, t, older.get(t, ())) for t in tickers) if r]
+        for r in rows:
+            if forge.get(r["ticker"]):
+                r.update(_long(r, forge[r["ticker"]]) or {})
         if rows:
             out["paths"].append({"group": group, "rows": rows})
     return out

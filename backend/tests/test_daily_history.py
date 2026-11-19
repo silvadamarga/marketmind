@@ -119,6 +119,21 @@ def test_news_daily_counts_and_tone_per_day():
     assert daily_history.news_daily(c, NOW) == [{"date": "2026-11-19", "count": 4, "net": 0.25}]
 
 
+def test_long_is_weekly_and_joins_the_chart():
+    row = {"dates": ["2025-12-01", "2025-12-02"], "spark": [300.0, 303.0]}
+    forge = [["2025-11-17", 140.0], ["2025-11-21", 145.0],            # one ISO week: Friday wins
+             ["2025-11-24", 148.0], ["2025-11-28", 149.0], ["2025-12-01", 150.0]]
+    out = daily_history._long(row, forge)
+    assert out["long_dates"] == ["2025-11-21", "2025-11-28"]
+    assert out["long"] == [290.0, 298.0]                               # scaled x2 to the VPS close
+    assert daily_history._long(row, [["2025-12-05", 1.0]]) is None     # nothing before the chart
+
+
+def test_forge_closes_missing_file_is_empty(tmp_path=None):
+    import pathlib
+    assert daily_history._forge_closes(pathlib.Path("/nonexistent/forge_history.json")) == {}
+
+
 def test_summary_names_and_drops_missing():
     prices = {"spy": {"move": -1.2, "norm": 0.6, "rank": {"below": 55, "of": 60},
                       "date": "2026-11-18", "live": False},

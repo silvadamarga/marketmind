@@ -48,3 +48,4 @@ NARRATIVES.md
 backend/live.json
 backend/live_hits.jsonl
 backend/feed.json
+backend/forge_history.json
