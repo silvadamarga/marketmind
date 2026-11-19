@@ -293,6 +293,15 @@ def get_daily_analysis():
             """, (since, impact_thr, novelty_thr))
             priority_events = [{"id": r[0], "title": r[1], "summary": r[2], "impact": r[3], "date": r[4], "source": r[5]} for r in cursor.fetchall()]
 
+            # Today against its own history (daily_history.py). A failure here
+            # drops only the history block; the 24h numbers still serve.
+            try:
+                import daily_history
+                history = daily_history.build(
+                    conn, datetime.datetime.now(datetime.timezone.utc), impact_thr, novelty_thr)
+            except Exception as e:
+                history = {"error": str(e)}
+
             result = json_safe({
                 "total_events": total_events,
                 "sentiment_counts": sentiment_counts,
@@ -300,6 +309,7 @@ def get_daily_analysis():
                 "top_categories": top_categories,
                 "priority_events": priority_events,
                 "thresholds": {"impact": impact_thr, "novelty": novelty_thr},
+                "history": history,
             })
             
             DAILY_CACHE = {"data": result, "timestamp": current_time}
