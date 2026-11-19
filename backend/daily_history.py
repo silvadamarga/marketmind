@@ -39,6 +39,21 @@ ASSET_GROUPS = (
     ("Sectors", SECTOR_TICKERS + ("SMH", "ITB")),
 )
 POINTS_TICKERS = ("^TNX",)
+# Plain names: the page never shows a bare fund ticker.
+NAMES = {
+    "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Small caps (Russell 2000)",
+    "DIA": "Dow Jones", "VTI": "Whole US market",
+    "^TNX": "10-year Treasury yield", "TLT": "Long-term Treasury bonds",
+    "JNK": "High-yield (junk) bonds", "DX-Y.NYB": "US dollar",
+    "GLD": "Gold", "SLV": "Silver", "USO": "Oil",
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ether", "^VIX": "VIX (expected volatility)",
+    "XLB": "Materials", "XLC": "Communication services", "XLE": "Energy",
+    "XLF": "Financials", "XLI": "Industrials", "XLK": "Technology",
+    "XLP": "Consumer staples", "XLRE": "Real estate", "XLU": "Utilities",
+    "XLV": "Health care", "XLY": "Consumer discretionary", "XBI": "Biotech",
+    "XRT": "Retail", "SMH": "Semiconductors", "ITB": "Homebuilders",
+}
+NEAR_EDGE = 0.05            # within 5% of the 90-day range of its high/low = "at" it
 AVG_SESSIONS = 50           # "vs its 50-day average"
 NY = ZoneInfo("America/New_York")
 US_OPEN = datetime.time(9, 30)
@@ -227,7 +242,8 @@ def _price_path(sessions, now, ticker):
         return round(last - ref, 3) if points else round((last / ref - 1) * 100, 2)
 
     avg = statistics.mean(closes[-AVG_SESSIONS:])
-    return {"ticker": ticker, "last": round(last, 4), "date": span[-1]["date"],
+    return {"ticker": ticker, "name": NAMES.get(ticker, ticker),
+            "last": round(last, 4), "date": span[-1]["date"],
             "live": span[-1]["live"], "points": points,
             "d1": change(1), "w1": change(5), "m1": change(21),
             "span": round(last - closes[0], 3) if points else round((last / closes[0] - 1) * 100, 2),
@@ -265,8 +281,8 @@ def price_history(conn, now):
     for t in SECTOR_TICKERS:
         m = _move_vs_norm(sessions(t))
         if m:
-            out["sectors"].append({"ticker": t, **m})
-    out["sectors"].sort(key=lambda s: s["ratio"] or 0, reverse=True)
+            out["sectors"].append({"ticker": t, "name": NAMES[t], **m})
+    out["sectors"].sort(key=lambda s: s["move"], reverse=True)   # best to worst
 
     vix_by_date = {s["date"]: s["close"] for s in vix}
     out["strip"] = [{"date": s["date"], "move": s["move"], "vix": vix_by_date.get(s["date"])}
@@ -280,12 +296,114 @@ def price_history(conn, now):
     return out
 
 
+def _share(rank):
+    return rank["below"] / rank["of"] if rank and rank.get("of") else None
+
+
+def _size_word(rank):
+    f = _share(rank)
+    if f is None:
+        return None
+    return ("much bigger than usual" if f >= 0.9 else "bigger than usual" if f >= 0.75
+            else "much smaller than usual" if f <= 0.1 else "smaller than usual" if f <= 0.25
+            else "about usual")
+
+
+def _level_word(rank):
+    f = _share(rank)
+    if f is None:
+        return None
+    return ("much higher than usual" if f >= 0.9 else "higher than usual" if f >= 0.75
+            else "much lower than usual" if f <= 0.1 else "lower than usual" if f <= 0.25
+            else "about usual")
+
+
+def _when(p):
+    if p.get("live"):
+        return "so far today"
+    return f"at the last close ({datetime.date.fromisoformat(p['date']).strftime('%a, %b %-d')})"
+
+
+def _pct(v, d=1):
+    return f"{'+' if v > 0 else ''}{v:.{d}f}%"
+
+
+def summary(news, prices):
+    """The day in plain sentences, built only from the numbers on the page.
+    Each item: {topic, text}. Missing data drops its sentence, never guesses."""
+    out = []
+    spy, vix = prices.get("spy"), prices.get("vix")
+    paths = {r["ticker"]: r for g in prices.get("paths", []) for r in g["rows"]}
+
+    if spy:
+        line = (f"The S&P 500 is {'up' if spy['move'] >= 0 else 'down'} {abs(spy['move']):.1f}% "
+                f"{_when(spy)}. That is a {_size_word(spy['rank']) or 'normal'} move "
+                f"(a typical day is about {spy['norm']:.1f}%).")
+        sp = paths.get("SPY")
+        if sp:
+            if sp["pos"] is not None and sp["pos"] <= NEAR_EDGE:
+                line += f" It is at its lowest level in {BASELINE_DAYS} days, {abs(sp['off_high']):.1f}% below its high."
+            elif sp["pos"] is not None and sp["pos"] >= 1 - NEAR_EDGE:
+                line += f" It is at its highest level in {BASELINE_DAYS} days."
+            else:
+                line += f" It is {abs(sp['off_high']):.1f}% below its {BASELINE_DAYS}-day high."
+        out.append({"topic": "Stocks", "text": line})
+
+    if vix:
+        out.append({"topic": "Fear gauge", "text":
+                    f"The VIX, which measures how big a swing traders expect, is {vix['level']:.1f}: "
+                    f"{_level_word(vix['rank']) or 'about usual'} (normal is about {vix['median']:.0f}, "
+                    f"higher than {vix['rank']['below']} of the last {vix['rank']['of']} sessions)."})
+
+    sectors = prices.get("sectors") or []
+    if len(sectors) >= 2:
+        best, worst = sectors[0], sectors[-1]
+        line = (f"Best sector {_when(best)}: {best['name']} {_pct(best['move'])}. "
+                f"Worst: {worst['name']} {_pct(worst['move'])}.")
+        odd = [s for s in sectors if (_share(s["rank"]) or 0) >= 0.9]
+        if odd:
+            line += " Unusually big moves: " + ", ".join(
+                f"{s['name']} {_pct(s['move'])}" for s in odd) + "."
+        out.append({"topic": "Sectors", "text": line})
+
+    lows = [r["name"] for r in paths.values() if r["pos"] is not None and r["pos"] <= NEAR_EDGE]
+    highs = [r["name"] for r in paths.values() if r["pos"] is not None and r["pos"] >= 1 - NEAR_EDGE]
+    if lows or highs:
+        parts = []
+        if lows:
+            parts.append(f"at or near {BASELINE_DAYS}-day lows: " + ", ".join(lows))
+        if highs:
+            parts.append(f"at or near {BASELINE_DAYS}-day highs: " + ", ".join(highs))
+        text = "; ".join(parts)
+        out.append({"topic": "Bigger picture", "text": text[0].upper() + text[1:] + "."})
+
+    m = (news or {}).get("metrics", {})
+    kind = (news or {}).get("day_kind", "day")
+    c, t = m.get("count"), m.get("net")
+    if c and c.get("median") is not None:
+        line = (f"{c['today']} news items in the last 24 hours, against a normal {kind} of about "
+                f"{c['median']:.0f}: {_level_word(c['rank'])}.")
+        if t and t.get("median") is not None:
+            line += (f" Tone {t['today'] * 100:+.0f} (bullish minus bearish per 100 items) "
+                     f"against a normal {t['median'] * 100:+.0f}: {_level_word(t['rank'])}.")
+        out.append({"topic": "News", "text": line})
+
+    odd = [n for n in (news or {}).get("names", []) if n["unusual"] or n["new"]][:5]
+    if odd:
+        out.append({"topic": "Names", "text": "Getting unusual attention: " + ", ".join(
+            f"{n['name']} ({n['today']} items, normally {n['avg']:.1f} a day)" for n in odd) + "."})
+    return out
+
+
 def build(conn, now, impact_thr, novelty_thr):
+    news = news_history(conn, now, impact_thr, novelty_thr)
+    prices = price_history(conn, now)
     return {"as_of": now.isoformat(),
             "baseline_days": BASELINE_DAYS,
             "price_sessions": PRICE_SESSIONS,
-            "news": news_history(conn, now, impact_thr, novelty_thr),
-            "prices": price_history(conn, now)}
+            "news": news,
+            "prices": prices,
+            "summary": summary(news, prices)}
 
 
 if __name__ == "__main__":  # quick look against any db: python daily_history.py <db>

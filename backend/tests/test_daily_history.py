@@ -82,6 +82,18 @@ def test_price_path_returns_and_range():
     y = daily_history._price_path(sess, NOW, "^TNX")
     assert y["points"] and y["d1"] == 1.0                     # yields move in points
 
+def test_summary_names_and_drops_missing():
+    prices = {"spy": {"move": -1.2, "norm": 0.6, "rank": {"below": 55, "of": 60},
+                      "date": "2026-11-18", "live": False},
+              "vix": None, "sectors": [],
+              "paths": [{"group": "Sectors", "rows": [
+                  {"ticker": "XLV", "name": "Health care", "pos": 0.0, "off_high": -4.0}]}]}
+    out = {x["topic"]: x["text"] for x in daily_history.summary({}, prices)}
+    assert "down 1.2% at the last close (Wed, Nov 18)" in out["Stocks"]
+    assert "much bigger than usual" in out["Stocks"]
+    assert out["Bigger picture"] == "At or near 90-day lows: Health care."
+    assert "Fear gauge" not in out and "News" not in out     # no data, no sentence
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
