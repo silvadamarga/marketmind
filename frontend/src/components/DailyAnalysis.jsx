@@ -8,7 +8,11 @@ import { AlertTriangle, Activity } from 'lucide-react';
 // (backend/daily_history.py). Decision support only.
 
 const card = 'bg-[#131b2e] border border-slate-800 rounded-xl';
-const signed = (v, d = 1) => (v === null || v === undefined ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}`);
+const signed = (v, d = 1) => {
+    if (v === null || v === undefined) return '—';
+    const t = Math.abs(v).toFixed(d);
+    return Number(t) === 0 ? t : `${v > 0 ? '+' : '-'}${t}`;
+};
 const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
 const shortDay = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const timeOf = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -128,6 +132,100 @@ const Diverging = ({ v, max, last, posCls, negCls }) => {
     );
 };
 
+// Price path helpers: yields (points=true) change in points, everything else in %.
+const chg = (v, points) => (v === null || v === undefined ? '—' : points ? `${signed(v, 2)} pt` : `${signed(v, 1)}%`);
+const chgCls = (v) => (v === null || v === undefined ? 'text-slate-500' : v >= 0 ? 'text-emerald-400' : 'text-red-400');
+const fmtPrice = (v) => (v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 }) : v.toFixed(2));
+
+const pathOf = (closes, w, h, lo, hi) => closes
+    .map((c, i) => `${(i / Math.max(closes.length - 1, 1)) * w},${hi === lo ? h / 2 : h - ((c - lo) / (hi - lo)) * h}`)
+    .join(' ');
+
+const Spark = ({ closes, up }) => {
+    if (!closes || closes.length < 2) return null;
+    const lo = Math.min(...closes), hi = Math.max(...closes);
+    return (
+        <svg viewBox="0 0 100 24" preserveAspectRatio="none" className="w-24 h-6">
+            <polyline points={pathOf(closes, 100, 24, lo, hi)} fill="none" vectorEffect="non-scaling-stroke"
+                strokeWidth="1.5" className={up ? 'stroke-emerald-400' : 'stroke-red-400'} />
+        </svg>
+    );
+};
+
+// 90-day price line with its high, low and 50-session average marked.
+const PriceChart = ({ r }) => {
+    const lo = r.low, hi = r.high, H = 160;
+    const y = (v) => (hi === lo ? H / 2 : H - ((v - lo) / (hi - lo)) * H);
+    return (
+        <div className={`${card} p-4`}>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="text-sm font-medium text-slate-300">{r.ticker} price, last {r.spark.length} sessions</span>
+                <span className="text-xs text-slate-500">
+                    {fmtPrice(r.last)} · <span className={chgCls(r.span)}>{chg(r.span, r.points)}</span> over the span · {chg(r.off_high, r.points)} from the high · {chg(r.vs_avg, r.points)} vs 50-day average
+                </span>
+            </div>
+            <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" className="w-full h-40 mt-3">
+                <line x1="0" x2="100" y1={y(hi)} y2={y(hi)} vectorEffect="non-scaling-stroke" strokeDasharray="3 3" className="stroke-slate-600" strokeWidth="1" />
+                <line x1="0" x2="100" y1={y(lo)} y2={y(lo)} vectorEffect="non-scaling-stroke" strokeDasharray="3 3" className="stroke-slate-600" strokeWidth="1" />
+                <line x1="0" x2="100" y1={y(r.avg)} y2={y(r.avg)} vectorEffect="non-scaling-stroke" className="stroke-amber-500/60" strokeWidth="1" />
+                <polyline points={pathOf(r.spark, 100, H, lo, hi)} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="2" className="stroke-indigo-400" />
+            </svg>
+            <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                <span>{shortDay(r.spark_dates[0])}</span>
+                <span>{shortDay(r.spark_dates[1])}</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+                dashed = high {fmtPrice(r.high)} / low {fmtPrice(r.low)} · amber = 50-day average {fmtPrice(r.avg)}
+            </div>
+        </div>
+    );
+};
+
+// Place in the low-high range of the span: 0% = at the low, 100% = at the high.
+const RangePos = ({ pos }) => (pos === null || pos === undefined ? <span className="text-slate-600">—</span> : (
+    <div className="relative h-2 w-20 bg-slate-800 rounded" title={`${Math.round(pos * 100)}% of the way from the low to the high`}>
+        <div className="absolute -top-0.5 h-3 w-1.5 -ml-[3px] rounded-sm bg-indigo-400" style={{ left: `${pos * 100}%` }} />
+    </div>
+));
+
+const PathTable = ({ groups }) => (
+    <div className={`${card} overflow-hidden`}>
+        <table className="w-full text-sm">
+            <thead>
+                <tr className="text-[11px] uppercase tracking-wide text-slate-500 text-right">
+                    <th className="text-left font-medium px-4 py-2">Ticker</th>
+                    <th className="font-medium px-2 py-2 hidden md:table-cell">Last</th>
+                    <th className="font-medium px-2 py-2 hidden sm:table-cell">1 day</th>
+                    <th className="font-medium px-2 py-2 hidden sm:table-cell">1 week</th>
+                    <th className="font-medium px-2 py-2">1 month</th>
+                    <th className="font-medium px-2 py-2">90 days</th>
+                    <th className="font-medium px-2 py-2 hidden md:table-cell">From high</th>
+                    <th className="font-medium px-2 py-2 text-left">Low → high</th>
+                    <th className="font-medium px-4 py-2 text-left hidden lg:table-cell">Path</th>
+                </tr>
+            </thead>
+            {groups.map((g) => (
+                <tbody key={g.group} className="border-t border-slate-800">
+                    <tr><td colSpan={9} className="px-4 pt-3 pb-1 text-xs font-semibold text-slate-400">{g.group}</td></tr>
+                    {g.rows.map((r) => (
+                        <tr key={r.ticker} className="text-right">
+                            <td className="text-left font-mono font-semibold text-slate-200 px-4 py-1.5 whitespace-nowrap">{r.ticker}</td>
+                            <td className="px-2 text-slate-300 hidden md:table-cell">{fmtPrice(r.last)}</td>
+                            <td className={`px-2 hidden sm:table-cell ${chgCls(r.d1)}`}>{chg(r.d1, r.points)}</td>
+                            <td className={`px-2 hidden sm:table-cell ${chgCls(r.w1)}`}>{chg(r.w1, r.points)}</td>
+                            <td className={`px-2 ${chgCls(r.m1)}`}>{chg(r.m1, r.points)}</td>
+                            <td className={`px-2 ${chgCls(r.span)}`}>{chg(r.span, r.points)}</td>
+                            <td className="px-2 text-slate-400 hidden md:table-cell">{chg(r.off_high, r.points)}</td>
+                            <td className="px-2"><RangePos pos={r.pos} /></td>
+                            <td className="px-4 hidden lg:table-cell"><Spark closes={r.spark} up={r.span >= 0} /></td>
+                        </tr>
+                    ))}
+                </tbody>
+            ))}
+        </table>
+    </div>
+);
+
 const Section = ({ title, sub, children }) => (
     <section>
         <h2 className="text-lg font-bold text-white">{title}</h2>
@@ -233,6 +331,21 @@ export default function DailyAnalysis() {
                         </div>
                     </Section>
                 )}
+
+                {/* Prices against their own last 90 days */}
+                {prices?.paths?.length > 0 && (() => {
+                    const spyPath = prices.paths.flatMap((g) => g.rows).find((r) => r.ticker === 'SPY');
+                    const at = prices.paths[0].rows[0];
+                    return (
+                        <Section title={`Prices vs their last ${h.baseline_days} days`}
+                            sub={`Returns to the ${at.live ? 'price so far today' : `close of ${shortDay(at.date)}`}. Low → high = where the price sits in its own ${h.baseline_days}-day range. Yields (^TNX) in points; crypto uses weekday closes.`}>
+                            <div className="space-y-4">
+                                {spyPath && <PriceChart r={spyPath} />}
+                                <PathTable groups={prices.paths} />
+                            </div>
+                        </Section>
+                    );
+                })()}
 
                 {/* Names and categories against their own norm */}
                 {news && (

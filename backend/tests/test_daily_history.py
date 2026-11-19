@@ -66,6 +66,22 @@ def test_pre_open_quote_is_not_a_session():
     assert s[-1]["date"] == "2026-11-19" and s[-1]["live"]
 
 
+def test_price_path_returns_and_range():
+    sess = []
+    day = dt.date(2026, 8, 3)
+    price = 100.0
+    while day < NOW.date():
+        if day.weekday() < 5:
+            price += 1
+            sess.append({"date": day.isoformat(), "close": price, "live": False})
+        day += dt.timedelta(days=1)
+    r = daily_history._price_path(sess, NOW, "SPY")
+    assert r["pos"] == 1.0 and r["off_high"] == 0.0        # straight line up: at the high
+    assert r["w1"] == round((sess[-1]["close"] / sess[-6]["close"] - 1) * 100, 2)
+    assert sess[0]["date"] < r["spark_dates"][0]              # trimmed to the 90-day span
+    y = daily_history._price_path(sess, NOW, "^TNX")
+    assert y["points"] and y["d1"] == 1.0                     # yields move in points
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

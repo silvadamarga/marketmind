@@ -29,6 +29,17 @@ RATIO_FLOOR = 0.5           # daily average floor, so a first mention isn't "inf
 SECTOR_TICKERS = ("XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE",
                   "XLU", "XLV", "XLY", "XBI", "XRT")
 MACRO_CATEGORIES = ("MACRO", "GEOPOLITICS", "CENTRAL_BANK")
+# Price-path table: every series market_data tracks, grouped. Yields move in
+# points, not percent.
+ASSET_GROUPS = (
+    ("Indexes", ("SPY", "QQQ", "IWM", "DIA", "VTI")),
+    ("Rates, credit, dollar", ("^TNX", "TLT", "JNK", "DX-Y.NYB")),
+    ("Commodities", ("GLD", "SLV", "USO")),
+    ("Crypto", ("BTC-USD", "ETH-USD")),
+    ("Sectors", SECTOR_TICKERS + ("SMH", "ITB")),
+)
+POINTS_TICKERS = ("^TNX",)
+AVG_SESSIONS = 50           # "vs its 50-day average"
 NY = ZoneInfo("America/New_York")
 US_OPEN = datetime.time(9, 30)
 
@@ -197,10 +208,49 @@ def _move_vs_norm(sessions):
             "live": sessions[-1]["live"]}
 
 
+def _price_path(sessions, now, ticker):
+    """Where a price sits against its own last BASELINE_DAYS: returns over 1
+    week, 1 month and the whole span, place in the span's low-high range, and
+    distance from the high and from the 50-session average."""
+    start = (now - datetime.timedelta(days=BASELINE_DAYS)).astimezone(NY).date().isoformat()
+    span = [s for s in sessions if s["date"] >= start]
+    if len(span) < MIN_BASELINE + 1:
+        return None
+    closes = [s["close"] for s in span]
+    last, high, low = closes[-1], max(closes), min(closes)
+    points = ticker in POINTS_TICKERS
+
+    def change(n):
+        if len(closes) <= n:
+            return None
+        ref = closes[-1 - n]
+        return round(last - ref, 3) if points else round((last / ref - 1) * 100, 2)
+
+    avg = statistics.mean(closes[-AVG_SESSIONS:])
+    return {"ticker": ticker, "last": round(last, 4), "date": span[-1]["date"],
+            "live": span[-1]["live"], "points": points,
+            "d1": change(1), "w1": change(5), "m1": change(21),
+            "span": round(last - closes[0], 3) if points else round((last / closes[0] - 1) * 100, 2),
+            "high": round(high, 4), "low": round(low, 4),
+            "pos": round((last - low) / (high - low), 3) if high > low else None,
+            "off_high": round(last - high, 3) if points else round((last / high - 1) * 100, 2),
+            "vs_avg": round(last - avg, 3) if points else round((last / avg - 1) * 100, 2),
+            "avg": round(avg, 4),
+            "spark": [round(c, 4) for c in closes],
+            "spark_dates": [span[0]["date"], span[-1]["date"]]}
+
+
 def price_history(conn, now):
     lo = (now - datetime.timedelta(days=BASELINE_DAYS + 10)).isoformat()
-    spy = _sessions(conn, "SPY", lo, now)
-    vix = _sessions(conn, "^VIX", lo, now)
+    cache = {}
+
+    def sessions(t):
+        if t not in cache:
+            cache[t] = _sessions(conn, t, lo, now)
+        return cache[t]
+
+    spy = sessions("SPY")
+    vix = sessions("^VIX")
     out = {"spy": _move_vs_norm(spy), "vix": None, "sectors": [], "strip": []}
 
     if len(vix) > MIN_BASELINE:
@@ -213,7 +263,7 @@ def price_history(conn, now):
                       "date": vix[-1]["date"], "live": vix[-1]["live"]}
 
     for t in SECTOR_TICKERS:
-        m = _move_vs_norm(_sessions(conn, t, lo, now))
+        m = _move_vs_norm(sessions(t))
         if m:
             out["sectors"].append({"ticker": t, **m})
     out["sectors"].sort(key=lambda s: s["ratio"] or 0, reverse=True)
@@ -221,6 +271,12 @@ def price_history(conn, now):
     vix_by_date = {s["date"]: s["close"] for s in vix}
     out["strip"] = [{"date": s["date"], "move": s["move"], "vix": vix_by_date.get(s["date"])}
                     for s in spy[-PRICE_SESSIONS - 1:] if s["move"] is not None]
+
+    out["paths"] = []
+    for group, tickers in ASSET_GROUPS:
+        rows = [r for r in (_price_path(sessions(t), now, t) for t in tickers) if r]
+        if rows:
+            out["paths"].append({"group": group, "rows": rows})
     return out
 
 
