@@ -65,29 +65,18 @@ const pathOf = (vals, w, h, lo, hi) => vals
     .map((c, i) => `${(i / Math.max(vals.length - 1, 1)) * w},${hi === lo ? h / 2 : h - ((c - lo) / (hi - lo)) * h}`)
     .join(' ');
 
-// Charts reach back further than the 90 days every verdict uses.
-const spanLabel = (dates) => {
-    if (!dates || dates.length < 2) return '';
-    const days = (asDate(dates[dates.length - 1]) - asDate(dates[0])) / 864e5;
-    return days >= 330 ? '1 year' : `${Math.round(days / 30.4)} months`;
-};
-
 // Small line with an optional dashed reference level and a dot on the last point.
-// With `split`, the line before that index is dimmed: the stretch outside the
-// window the numbers are measured on. Literal class names, so Tailwind generates them.
+// Literal class names, so Tailwind generates them.
 const DOT = { 'stroke-emerald-400': 'bg-emerald-400', 'stroke-red-400': 'bg-red-400', 'stroke-amber-400': 'bg-amber-400' };
-const Spark = ({ vals, cls, refLine, split = 0, w = 'w-20', h = 20 }) => {
+const Spark = ({ vals, cls, refLine, w = 'w-20', h = 20 }) => {
     if (!vals || vals.length < 2) return null;
     const lo = Math.min(...vals, refLine ?? Infinity), hi = Math.max(...vals, refLine ?? -Infinity);
     const y = (v) => (hi === lo ? h / 2 : h - ((v - lo) / (hi - lo)) * h);
-    const pts = pathOf(vals, 100, h, lo, hi).split(' ');
-    const cut = Math.min(Math.max(split, 0), pts.length - 2);
     return (
         <div className={`relative ${w}`} style={{ height: h }}>
             <svg viewBox={`0 0 100 ${h}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
                 {refLine !== undefined && <line x1="0" x2="100" y1={y(refLine)} y2={y(refLine)} vectorEffect="non-scaling-stroke" strokeDasharray="2 2" strokeWidth="1" className="stroke-slate-500" />}
-                {cut > 0 && <polyline points={pts.slice(0, cut + 1).join(' ')} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="1.25" className="stroke-slate-500" />}
-                <polyline points={pts.slice(cut).join(' ')} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="1.5" className={cls} />
+                <polyline points={pathOf(vals, 100, h, lo, hi)} fill="none" vectorEffect="non-scaling-stroke" strokeWidth="1.5" className={cls} />
             </svg>
             <span className={`absolute w-1.5 h-1.5 -mr-[3px] -mt-[3px] rounded-full right-0 ${DOT[cls] || 'bg-slate-400'}`} style={{ top: y(vals[vals.length - 1]) }} />
         </div>
@@ -400,16 +389,16 @@ const Panel = ({ icon, title, note, children, className = '' }) => {
 const th = 'font-medium px-1.5 py-1';
 const td = 'px-1.5 py-[3px]';
 
-// A row's chart: the whole span, grey before the last 90 days, colored by
-// the 90-day change.
+// A row's chart: the last 90 days, colored by the 90-day change. The rows
+// carry a longer series for the main chart; `from90` is where 90 days start.
 const MiniChart = ({ r }) => (
-    <div title={`${chg(r.chart_change, r.points)} over ${spanLabel(r.dates)} · ${chg(r.span, r.points)} over 90 days`}>
-        <Spark vals={r.spark} split={r.from90} cls={r.span >= 0 ? 'stroke-emerald-400' : 'stroke-red-400'} />
+    <div title={`${chg(r.span, r.points)} over 90 days`}>
+        <Spark vals={r.spark.slice(r.from90 ?? 0)} cls={r.span >= 0 ? 'stroke-emerald-400' : 'stroke-red-400'} />
     </div>
 );
 
 // Cross-asset rows: one line each, groups as thin labels.
-const AssetTable = ({ groups, days, chartLabel }) => (
+const AssetTable = ({ groups, days }) => (
     <table className="w-full text-[13px] tabular-nums">
         <thead>
             <tr className="text-[10px] uppercase tracking-wide text-slate-500 text-right">
@@ -420,7 +409,7 @@ const AssetTable = ({ groups, days, chartLabel }) => (
                 <th className={th}>Month</th>
                 <th className={th}>{days}d</th>
                 <th className={`${th} text-left`} title="Where today sits between the 90-day low and high">Range</th>
-                <th className={`${th} pr-3 text-left hidden md:table-cell`} title="Grey = before the last 90 days">{chartLabel}</th>
+                <th className={`${th} pr-3 text-left hidden md:table-cell`} >{days}d chart</th>
             </tr>
         </thead>
         {groups.map((g) => {
@@ -448,7 +437,7 @@ const AssetTable = ({ groups, days, chartLabel }) => (
 
 // Sectors: today's move over each sector's typical-day band, then the longer
 // view. Sector funds without a live read today fall back to their last close.
-const SectorTable = ({ rows, days, chartLabel }) => {
+const SectorTable = ({ rows, days }) => {
     const max = Math.max(0.5, ...rows.map((s) => Math.max(Math.abs(s.move ?? 0), s.norm ?? 0)));
     return (
         <table className="w-full text-[13px] tabular-nums">
@@ -460,7 +449,7 @@ const SectorTable = ({ rows, days, chartLabel }) => {
                     <th className={`${th} hidden sm:table-cell`}>Month</th>
                     <th className={th}>{days}d</th>
                     <th className={`${th} text-left`}>Range</th>
-                    <th className={`${th} pr-3 text-left hidden md:table-cell`} title="Grey = before the last 90 days">{chartLabel}</th>
+                    <th className={`${th} pr-3 text-left hidden md:table-cell`} >{days}d chart</th>
                 </tr>
             </thead>
             <tbody className="border-t border-slate-800/80">
@@ -547,13 +536,11 @@ export default function DailyAnalysis() {
     const vix = prices?.vix;
     const groups = prices?.paths || [];
     const spyPath = groups.flatMap((g) => g.rows).find((r) => r.ticker === 'SPY');
-    const chartLabel = spanLabel(spyPath?.dates);
-    // S&P 500 daily moves for the tile: the last ~6 months of closes.
-    const spyMoves = spyPath
-        ? spyPath.spark.slice(1).map((c, i) => ({ date: spyPath.dates[i + 1], move: (c / spyPath.spark[i] - 1) * 100 })).slice(-125)
-        : (prices?.strip || []);
+    // The tiles read the last 60 sessions (~90 days), the window their
+    // verdicts are measured on; only the main chart reaches further back.
+    const spyMoves = prices?.strip || [];
     const maxMove = Math.max(0.5, ...spyMoves.map((s) => Math.abs(s.move)));
-    const vixVals = vix?.spark || (prices?.strip || []).map((s) => s.vix).filter((v) => v !== null && v !== undefined);
+    const vixVals = spyMoves.map((s) => s.vix).filter((v) => v !== null && v !== undefined);
     const assetGroups = groups.filter((g) => g.group !== 'Sectors');
     // Sector rows: the longer view from the paths, today's read and its
     // typical-day band from `sectors`; best to worst today.
@@ -579,14 +566,14 @@ export default function DailyAnalysis() {
                     <Tile icon={LineChart} label="S&P 500" value={spy ? `${signed(spy.move, 2)}%` : '—'} valueCls={upDown(spy?.move)}
                         v={spy && verdict(spy.rank, 'move')} rank={spy?.rank}
                         sub={spy ? `${whenOf(spy)} · typical ±${spy.norm}%` : 'not enough price history'}>
-                        <Strip gap="gap-0" items={spyMoves.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${signed(s.move, 2)}%` }))}
+                        <Strip items={spyMoves.map((s) => ({ ...s, title: `${shortDay(s.date)}: ${signed(s.move, 2)}%` }))}
                             bar={(s, last) => <Diverging v={s.move} max={maxMove} last={last} band={spy?.norm} />} />
                     </Tile>
                     <Tile icon={Gauge} label="VIX, fear gauge" value={vix ? vix.level.toFixed(1) : '—'}
                         v={vix && verdict(vix.rank)} rank={vix?.rank}
                         sub={vix ? `${signed(vix.move)}% ${whenOf(vix)} · normal ${vix.median}` : 'not enough price history'}>
-                        <div title={`${spanLabel(vix?.dates) || `${vixVals.length} sessions`}; bright = the 60 sessions normal is read from; dashed = normal ${vix?.median}`}>
-                            <Spark vals={vixVals} refLine={vix?.median} split={vixVals.length - 61} cls="stroke-amber-400" w="w-full" h={36} />
+                        <div title={`Last ${vixVals.length} sessions; dashed = normal ${vix?.median}`}>
+                            <Spark vals={vixVals} refLine={vix?.median} cls="stroke-amber-400" w="w-full" h={36} />
                         </div>
                     </Tile>
                     <Tile icon={Newspaper} label="Stories, 24h" value={round(m?.count.today ?? total_events)}
@@ -646,12 +633,12 @@ export default function DailyAnalysis() {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
                         {assetGroups.length > 0 && (
                             <Panel icon={Activity} title="Markets" note={spy ? whenOf(spy) : null}>
-                                <div className="pb-2 overflow-x-auto"><AssetTable groups={assetGroups} days={h.baseline_days} chartLabel={chartLabel} /></div>
+                                <div className="pb-2 overflow-x-auto"><AssetTable groups={assetGroups} days={h.baseline_days} /></div>
                             </Panel>
                         )}
                         {sectorRows.length > 0 && (
                             <Panel icon={LayoutGrid} title="Sectors, best to worst today" note={<><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 mr-1 align-middle" />bigger move than usual</>}>
-                                <div className="pb-2 overflow-x-auto"><SectorTable rows={sectorRows} days={h.baseline_days} chartLabel={chartLabel} /></div>
+                                <div className="pb-2 overflow-x-auto"><SectorTable rows={sectorRows} days={h.baseline_days} /></div>
                             </Panel>
                         )}
                     </div>
