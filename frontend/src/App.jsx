@@ -26,9 +26,9 @@ export default function MarketMindDashboard() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Filters. Default Priority >= 4 so the public feed shows a broader stream by
-  // default; friends can raise it to see only top-priority (HIGH/CRITICAL) news.
-  const [minRelevance, setMinRelevance] = useState(4);
+  // Filters. No default priority floor: the feed shows every item until the
+  // reader picks a tier in the side panel.
+  const [minRelevance, setMinRelevance] = useState(0);
   const [minConfidence, setMinConfidence] = useState(0);
   const [minNovelty, setMinNovelty] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("ALL");
@@ -146,7 +146,7 @@ export default function MarketMindDashboard() {
   };
 
   const resetFilters = () => {
-    setMinRelevance(7);
+    setMinRelevance(0);
     setMinConfidence(0);
     setMinNovelty(0);
     setSelectedCategory("ALL");
