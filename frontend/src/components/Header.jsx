@@ -2,20 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 import UniverseBar from './UniverseBar';
 import { tabLabel } from '../utils/nav';
-
-// Exchange clocks. Hours are the regular sessions, Mon-Fri; holidays are not
-// known here, so on a holiday the dot still reads open.
-const MARKETS = [
-    { label: 'NY', tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 },
-    { label: 'FRA', tz: 'Europe/Berlin', open: 9 * 60, close: 17 * 60 + 30 },
-];
-
-const zoned = (now, tz) => {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
-        timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    }).formatToParts(now).map(p => [p.type, p.value]));
-    return { hhmm: `${parts.hour}:${parts.minute}`, mins: +parts.hour * 60 + +parts.minute, weekday: parts.weekday };
-};
+import { MARKETS, marketStatus } from '../utils/markets';
 
 function MarketClocks() {
     const [now, setNow] = useState(() => new Date());
@@ -26,10 +13,10 @@ function MarketClocks() {
     return (
         <div className="flex items-center gap-2.5 sm:gap-3 font-mono text-[11px]">
             {MARKETS.map(m => {
-                const z = zoned(now, m.tz);
-                const isOpen = !['Sat', 'Sun'].includes(z.weekday) && z.mins >= m.open && z.mins < m.close;
+                const z = marketStatus(m, now);
+                const isOpen = z.open;
                 return (
-                    <span key={m.label} className="flex items-center gap-1.5" title={`${m.tz} · ${isOpen ? 'open' : 'closed'}`}>
+                    <span key={m.label} className="flex items-center gap-1.5" title={`${m.name} · ${z.why}`}>
                         <span className="text-slate-500">{m.label}</span>
                         <span className="text-slate-300">{z.hhmm}</span>
                         <span className={`text-[9px] font-bold tracking-wide px-1 rounded ${isOpen ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-700/40 text-slate-500'}`}>{isOpen ? 'OPEN' : 'CLOSED'}</span>
