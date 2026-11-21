@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
-import Sidebar from './components/Sidebar';
+import Sidebar, { BottomNav } from './components/Sidebar';
+import { NAV, activeFilterCount } from './utils/nav';
 import Header from './components/Header';
 import Feed from './components/Feed';
 import Filters from './components/Filters';
@@ -15,9 +15,22 @@ import ForgeFeed from './components/ForgeFeed';
 import { SECTOR_ETFS, BENCHMARK } from './utils/constants';
 
 const API_BASE = "";
+// Feed page size: ~100 headlines land per day, so a page is several days.
+const FEED_PAGE = 500;
+// The 5s poll only needs the newest items to merge on top.
+const FEED_POLL = 50;
 
 export default function MarketMindDashboard() {
-  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'feed');
+  const [activeTab, setActiveTab] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return NAV.some(n => n.id === t) ? t : 'feed';
+  });
+  // Keep ?tab= in the URL so a reload (or a home-screen bookmark) lands on the same tab.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', activeTab);
+    window.history.replaceState(null, '', url);
+  }, [activeTab]);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [updates, setUpdates] = useState([]);
   const [signals, setSignals] = useState([]);
@@ -27,7 +40,7 @@ export default function MarketMindDashboard() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Filters. No default priority floor: the feed shows every item until the
-  // reader picks a tier in the side panel.
+  // reader picks a priority tier in the feed toolbar.
   const [minRelevance, setMinRelevance] = useState(0);
   const [minConfidence, setMinConfidence] = useState(0);
   const [minNovelty, setMinNovelty] = useState(0);
@@ -38,24 +51,23 @@ export default function MarketMindDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [lastConnection, setLastConnection] = useState("Connecting...");
 
-  // Layout
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileConfigOpen, setMobileConfigOpen] = useState(false);
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Debounced Search
+  // Debounced Search. The mount effect below does the first load; after that a
+  // search change (including clearing it) replaces the feed with a fresh page.
+  const searchMounted = React.useRef(false);
   useEffect(() => {
+    if (!searchMounted.current) { searchMounted.current = true; return; }
     const delayDebounceFn = setTimeout(() => {
-      fetchData(searchTerm);
+      fetchData(searchTerm, FEED_PAGE, true);
     }, 500);
 
     return () => clearTimeout(delayDebounceFn);
   }, [searchTerm]); // Removed fetchData from dependency to avoid loop
 
-  const fetchData = async (searchQuery = searchTerm) => {
+  const fetchData = async (searchQuery = searchTerm, limit = FEED_PAGE, replace = false) => {
     try {
-      let url = `${API_BASE}/api/feed?limit=100`;
+      let url = `${API_BASE}/api/feed?limit=${limit}`;
       if (searchQuery) {
           url += `&search_term=${encodeURIComponent(searchQuery)}`;
       }
@@ -67,9 +79,9 @@ export default function MarketMindDashboard() {
         // But for "live" updates it complicates things. 
         // Simple approach: If searching, REPLACE. If empty search, reset/append.
         
-        if (searchQuery) {
+        if (searchQuery || replace) {
             setUpdates(newUpdates);
-            setHasMore(newUpdates.length >= 100); 
+            setHasMore(newUpdates.length >= limit);
         } else {
             setUpdates(prev => {
               // Standard merge logic
@@ -99,7 +111,7 @@ export default function MarketMindDashboard() {
     setLoadingMore(true);
     try {
       const lastItem = updates[updates.length - 1];
-      let url = `${API_BASE}/api/feed?before_id=${lastItem.id}&before_time=${encodeURIComponent(lastItem.date)}`;
+      let url = `${API_BASE}/api/feed?limit=${FEED_PAGE}&before_id=${lastItem.id}&before_time=${encodeURIComponent(lastItem.date)}`;
       if (searchTerm) {
           url += `&search_term=${encodeURIComponent(searchTerm)}`;
       }
@@ -136,14 +148,10 @@ export default function MarketMindDashboard() {
     // Poll only if no search term (optional, or poll with search term)
     const interval = setInterval(() => {
         // Now checks the LIVE value of search term via ref
-        if (!searchTermRef.current) fetchData();
+        if (!searchTermRef.current) fetchData('', FEED_POLL);
     }, 5000);
     return () => clearInterval(interval);
   }, []); // Empty dependency to run once on mount
-
-  const handleExport = () => {
-    window.location.href = `${API_BASE}/api/export`;
-  };
 
   const resetFilters = () => {
     setMinRelevance(0);
@@ -188,84 +196,31 @@ export default function MarketMindDashboard() {
   // REPEAT 4x to ensure smooth loop even on 4K/Ultrawide screens
   const marqueeSignals = [...sortedSignals, ...sortedSignals, ...sortedSignals, ...sortedSignals];
 
+  const filterProps = {
+    resetFilters, minRelevance, setMinRelevance, minConfidence, setMinConfidence,
+    minNovelty, setMinNovelty, selectedSession, setSelectedSession, availableSessions,
+    selectedSource, setSelectedSource, availableSources, selectedCategory,
+    setSelectedCategory, availableCategories, updates, filteredUpdates,
+  };
+
+  // Mobile first: header + content + bottom tab bar in one column. From lg up a
+  // fixed left rail replaces the bottom bar. Feed filters open as a sheet.
   return (
-    <div className="flex h-screen w-full bg-[#0B0F19] text-slate-200 font-sans overflow-hidden text-base">
+    <div className="flex h-[100dvh] w-full bg-[#0B0F19] text-slate-200 font-sans overflow-hidden text-base">
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* --- MOBILE OVERLAYS --- */}
-      <div className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} onClick={() => setMobileMenuOpen(false)} />
-      <aside className={`fixed inset-y-0 left-0 w-72 bg-[#0f1422] border-r border-slate-800 z-50 transform transition-transform duration-300 lg:hidden ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-6 flex items-center justify-between">
-          <span className="text-xl font-bold text-white">MarketMind</span>
-          <button onClick={() => setMobileMenuOpen(false)}><X size={24} /></button>
-        </div>
-        <Sidebar 
-          activeTab={activeTab} 
-          setActiveTab={setActiveTab} 
-          loading={loading} 
-          lastConnection={lastConnection}
-          mobile={true}
-          onClose={() => setMobileMenuOpen(false)}
-        />
-      </aside>
-
-      <div className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity ${mobileConfigOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} onClick={() => setMobileConfigOpen(false)} />
-      <aside className={`fixed inset-y-0 right-0 w-80 bg-[#0f1422] border-l border-slate-800 z-50 transform transition-transform duration-300 lg:hidden ${mobileConfigOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-        <div className="p-6 flex items-center justify-between">
-          <h2 className="text-white text-lg font-bold">Filters</h2>
-          <button onClick={() => setMobileConfigOpen(false)}><X size={24} /></button>
-        </div>
-        <Filters
-          resetFilters={resetFilters}
-          minRelevance={minRelevance}
-          setMinRelevance={setMinRelevance}
-          minConfidence={minConfidence}
-          setMinConfidence={setMinConfidence}
-          minNovelty={minNovelty}
-          setMinNovelty={setMinNovelty}
-          selectedSession={selectedSession}
-          setSelectedSession={setSelectedSession}
-          availableSessions={availableSessions}
-          selectedSource={selectedSource}
-          setSelectedSource={setSelectedSource}
-          availableSources={availableSources}
-          selectedCategory={selectedCategory}
-          setSelectedCategory={setSelectedCategory}
-          availableCategories={availableCategories}
-          updates={updates}
-          filteredUpdates={filteredUpdates}
-          mobile={true}
-        />
-      </aside>
-
-      {/* --- DESKTOP LEFT SIDEBAR --- */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        leftOpen={leftOpen}
-        loading={loading}
-        lastConnection={lastConnection}
-      />
-
-      {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 flex flex-col h-full relative min-w-0 bg-[#0B0F19]">
-
-        {/* Header */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <Header
           activeTab={activeTab}
-          setMobileMenuOpen={setMobileMenuOpen}
-          leftOpen={leftOpen}
-          setLeftOpen={setLeftOpen}
-          rightOpen={rightOpen}
-          setRightOpen={setRightOpen}
-          setMobileConfigOpen={setMobileConfigOpen}
-          handleExport={handleExport}
+          loading={loading}
+          lastConnection={lastConnection}
           signals={signals}
           marqueeDuration={marqueeDuration}
           marqueeSignals={marqueeSignals}
           spyChange={spyChange}
         />
 
-        {/* Content Body */}
+        <main className="flex-1 flex flex-col min-h-0 relative bg-[#0B0F19]">
         {activeTab === 'live' ? (
              <Live />
         ) : activeTab === 'forge' ? (
@@ -284,42 +239,26 @@ export default function MarketMindDashboard() {
             <Inspiration />
         ) : (
             <Feed
-              activeTab={activeTab}
               setActiveTab={setActiveTab}
               searchTerm={searchTerm}
               setSearchTerm={setSearchTerm}
+              updates={updates}
               filteredUpdates={filteredUpdates}
-              signals={signals}
               loadMore={loadMore}
               hasMore={hasMore}
               loadingMore={loadingMore}
+              minRelevance={minRelevance}
+              setMinRelevance={setMinRelevance}
+              filterCount={activeFilterCount(filterProps)}
+              openFilters={() => setFiltersOpen(true)}
             />
         )}
-      </main>
+        </main>
 
-      {/* --- DESKTOP RIGHT SIDEBAR --- */}
-      <Filters
-        rightOpen={rightOpen}
-        resetFilters={resetFilters}
-        minRelevance={minRelevance}
-        setMinRelevance={setMinRelevance}
-        minConfidence={minConfidence}
-        setMinConfidence={setMinConfidence}
-        minNovelty={minNovelty}
-        setMinNovelty={setMinNovelty}
-        selectedSession={selectedSession}
-        setSelectedSession={setSelectedSession}
-        availableSessions={availableSessions}
-        selectedSource={selectedSource}
-        setSelectedSource={setSelectedSource}
-        availableSources={availableSources}
-        selectedCategory={selectedCategory}
-        setSelectedCategory={setSelectedCategory}
-        availableCategories={availableCategories}
-        updates={updates}
-        filteredUpdates={filteredUpdates}
-      />
+        <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
+      </div>
 
+      <Filters open={filtersOpen} onClose={() => setFiltersOpen(false)} {...filterProps} />
     </div>
   );
 }

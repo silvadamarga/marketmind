@@ -1,45 +1,29 @@
 import React from 'react';
-import { Menu, PanelLeftClose, PanelLeftOpen, ExternalLink, PanelRightClose, PanelRightOpen, SlidersHorizontal, Zap, Droplets, Activity, TrendingUp, Check } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
 import UniverseBar from './UniverseBar';
+import { tabLabel } from '../utils/nav';
 
 export default function Header({
     activeTab,
-    setMobileMenuOpen,
-    leftOpen,
-    setLeftOpen,
-    rightOpen,
-    setRightOpen,
-    setMobileConfigOpen,
-    handleExport,
+    loading,
+    lastConnection,
     signals,
     marqueeDuration,
     marqueeSignals,
     spyChange
 }) {
     return (
-        <header className="flex flex-col border-b border-slate-800 bg-[#0f1422]/50 backdrop-blur-md w-full z-30 sticky top-0">
-            <div className="h-16 flex items-center justify-between px-4 sm:px-8 border-b border-slate-800/50 w-full">
-                <div className="flex items-center space-x-4">
-                    <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white"><Menu size={24} /></button>
-                    <button onClick={() => setLeftOpen(!leftOpen)} className="hidden lg:block p-2 text-slate-400 hover:text-white transition-colors">
-                        {leftOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
-                    </button>
-                    <h1 className="text-xl sm:text-2xl font-semibold text-white truncate">
-                        {activeTab === 'feed' ? 'Intelligence Feed' : activeTab === 'live' ? 'Live Desk' : activeTab === 'forge' ? 'Forge Feed' : 'Configuration'}
-                    </h1>
+        <header className="flex flex-col border-b border-slate-800 bg-[#0f1422] w-full z-30 shrink-0">
+            <div className="h-12 lg:h-14 flex items-center justify-between px-4 lg:px-6 border-b border-slate-800/50 w-full">
+                <div className="flex items-center gap-2.5 min-w-0">
+                    <Activity className="lg:hidden text-indigo-400 shrink-0" size={20} />
+                    <h1 className="text-base lg:text-xl font-semibold text-white truncate">{tabLabel(activeTab)}</h1>
                 </div>
-
-                <div className="flex items-center space-x-4">
-                    <button onClick={handleExport} className="hidden sm:flex items-center space-x-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg shadow-lg shadow-indigo-500/20">
-                        <ExternalLink size={16} />
-                        <span>Export</span>
-                    </button>
-
-                    <button onClick={() => setRightOpen(!rightOpen)} className="hidden lg:block p-2 text-slate-400 hover:text-white transition-colors">
-                        {rightOpen ? <PanelRightClose size={20} /> : <PanelRightOpen size={20} />}
-                    </button>
-                    <button onClick={() => setMobileConfigOpen(true)} className="lg:hidden p-2 text-slate-400"><SlidersHorizontal size={24} /></button>
+                {/* Heartbeat: green when the last poll landed, amber while syncing. */}
+                <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono shrink-0" title={`Last sync ${lastConnection}`}>
+                    <span className={`w-2 h-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+                    <span className="hidden sm:inline">{lastConnection}</span>
                 </div>
             </div>
 

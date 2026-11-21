@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Filter, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Filter, SlidersHorizontal } from 'lucide-react';
+import { Chip } from './Filters';
+import { PRIORITY_TIERS } from '../utils/nav';
 import FeedCard from './FeedCard';
 import ForgeCards from './ForgeCards';
 
@@ -76,7 +78,23 @@ const groupSimilar = (items) => {
     return groups;
 };
 
-export default function Feed({ activeTab, searchTerm, setSearchTerm, filteredUpdates, signals, loadMore, hasMore, loadingMore, setActiveTab }) {
+export default function Feed({ searchTerm, setSearchTerm, updates, filteredUpdates, loadMore, hasMore, loadingMore, setActiveTab, minRelevance, setMinRelevance, filterCount, openFilters }) {
+    // Infinite scroll: load the next page when the bottom sentinel scrolls into
+    // view. The observer is built once per hasMore, so it fires on scroll
+    // transitions only; a narrow filter can't chain-load the whole history.
+    const sentinel = useRef(null);
+    const loadMoreRef = useRef(loadMore);
+    useEffect(() => { loadMoreRef.current = loadMore; });
+    useEffect(() => {
+        const el = sentinel.current;
+        if (!el || !hasMore) return;
+        const io = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) loadMoreRef.current();
+        }, { rootMargin: '600px' });
+        io.observe(el);
+        return () => io.disconnect();
+    }, [hasMore]);
+
     // Narratives are embedded inline on the news cards (no separate strip): index
     // the light cards by entity so a FeedCard can find its story by ticker/category tag.
     const [narrativeIndex, setNarrativeIndex] = useState({});
@@ -94,25 +112,42 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, filteredUpd
         return () => { alive = false; };
     }, []);
     return (
-        <div className="flex-1 overflow-hidden flex min-w-0 relative">
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent min-w-0">
-                {activeTab === 'feed' && (
+        <div className="flex-1 overflow-y-auto min-w-0 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+            {/* Sticky toolbar: search, filter sheet, priority tiers */}
+            <div className="sticky top-0 z-20 bg-[#0B0F19]/95 backdrop-blur border-b border-slate-800">
+                <div className="max-w-5xl mx-auto px-3 sm:px-6 py-2.5 space-y-2">
+                    <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                            <input
+                                type="search" placeholder="Search news, tickers, topics" value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full bg-slate-800/50 border border-slate-700 text-slate-200 pl-9 pr-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-slate-500 text-base sm:text-sm"
+                            />
+                        </div>
+                        <button onClick={openFilters} className="relative shrink-0 p-2.5 rounded-lg border border-slate-700 bg-slate-800/50 text-slate-300 hover:text-white" title="Filters">
+                            <SlidersHorizontal size={18} />
+                            {filterCount > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-500 text-white text-[10px] font-bold flex items-center justify-center">{filterCount}</span>
+                            )}
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none -mx-1 px-1">
+                        {PRIORITY_TIERS.map(t => (
+                            <Chip key={t.min} active={minRelevance === t.min} onClick={() => setMinRelevance(t.min)}>
+                                <span className="whitespace-nowrap">{t.label} <span className="font-mono opacity-60">{updates.filter(u => (u.relevanceScore || 0) >= t.min).length}</span></span>
+                            </Chip>
+                        ))}
+                        <span className="hidden sm:inline ml-auto pl-2 text-[11px] text-slate-500 font-mono whitespace-nowrap">{filteredUpdates.length} shown</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="p-3 sm:p-6">
                     <div className="max-w-5xl mx-auto space-y-1 sm:space-y-1.5">
 
                         {/* The forge's per-name cards (plan 27 F1) sit above the headlines */}
                         <ForgeCards />
-
-                        {/* Search Bar */}
-                        <div className="flex items-center space-x-3 mb-4 sm:mb-6">
-                            <div className="relative flex-1">
-                                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                                <input
-                                    type="text" placeholder="Search dataset..." value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="w-full bg-slate-800/50 border border-slate-700 text-slate-200 pl-10 pr-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-slate-600 text-sm"
-                                />
-                            </div>
-                        </div>
 
                         {filteredUpdates.length === 0 ? (
                             <div className="text-center py-32 opacity-50">
@@ -166,42 +201,8 @@ export default function Feed({ activeTab, searchTerm, setSearchTerm, filteredUpd
                                 </button>
                             </div>
                         )}
+                        {hasMore && <div ref={sentinel} />}
                     </div>
-                )}
-
-                {activeTab === 'sources' && (
-                    <div className="max-w-4xl mx-auto space-y-6">
-                        <h2 className="text-2xl font-bold mb-6">System Status</h2>
-                        
-                        {/* Universe Stats */}
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <div className="bg-[#131b2e] border border-slate-800 p-5 rounded-xl">
-                                <div className="text-slate-400 text-sm font-medium mb-1">Universe Size</div>
-                                <div className="text-3xl font-bold text-white">{signals.length}</div>
-                                <div className="text-xs text-slate-500 mt-2">Tracked Assets</div>
-                            </div>
-                            <div className="bg-[#131b2e] border border-slate-800 p-5 rounded-xl">
-                                <div className="text-slate-400 text-sm font-medium mb-1">Data Points</div>
-                                <div className="text-3xl font-bold text-white">{signals.length * 5}</div>
-                                <div className="text-xs text-slate-500 mt-2">Real-time Metrics</div>
-                            </div>
-                            <div className="bg-[#131b2e] border border-slate-800 p-5 rounded-xl">
-                                <div className="text-slate-400 text-sm font-medium mb-1">Update Rate</div>
-                                <div className="text-3xl font-bold text-emerald-400">15m</div>
-                                <div className="text-xs text-slate-500 mt-2">Candle Interval</div>
-                            </div>
-                        </div>
-
-                        <h3 className="text-lg font-bold mt-8 mb-4">Active Connectors</h3>
-                        <div className="bg-[#131b2e] border border-slate-800 p-6 rounded-xl flex items-center justify-between">
-                            <div className="flex items-center space-x-4">
-                                <div className="p-3 bg-slate-800 rounded-lg text-slate-400"><CheckCircle2 size={24} className="text-emerald-500" /></div>
-                                <div><h3 className="font-medium text-slate-200 text-lg">Pushbullet Stream</h3><code className="text-sm text-slate-500">wss://stream.pushbullet.com</code></div>
-                            </div>
-                            <span className="text-emerald-500 text-sm px-3 py-1 bg-emerald-500/10 rounded-full font-medium">Connected</span>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

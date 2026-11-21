@@ -1,13 +1,6 @@
 import React from 'react';
-import { RotateCcw } from 'lucide-react';
-
-// Priority tiers mirror the backend's impact labels (main.py format_news_event).
-const PRIORITY_TIERS = [
-    { label: 'Any', min: 0 },
-    { label: 'Medium+', min: 5 },
-    { label: 'High+', min: 7 },
-    { label: 'Critical', min: 9 },
-];
+import { RotateCcw, X } from 'lucide-react';
+import { activeFilterCount } from '../utils/nav';
 
 const Section = ({ label, hint, children }) => (
     <section className="space-y-2.5">
@@ -19,7 +12,7 @@ const Section = ({ label, hint, children }) => (
     </section>
 );
 
-const Chip = ({ active, onClick, children }) => (
+export const Chip = ({ active, onClick, children }) => (
     <button
         onClick={onClick}
         className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${active
@@ -42,17 +35,18 @@ const Threshold = ({ label, value, onChange, accent }) => (
 );
 
 const Select = ({ value, onChange, allLabel, options }) => (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-2 outline-none focus:border-indigo-500">
+    <select value={value} onChange={(e) => onChange(e.target.value)} className="block w-full bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg px-2 py-2 outline-none focus:border-indigo-500">
         <option value="ALL">{allLabel}</option>
         {options.filter(o => o !== 'ALL').map(o => <option key={o} value={o}>{o}</option>)}
     </select>
 );
 
+// The feed's filter sheet: a bottom sheet on the phone, a right-side drawer on desktop.
 export default function Filters({
-    rightOpen,
+    open,
+    onClose,
     resetFilters,
     minRelevance,
-    setMinRelevance,
     minConfidence,
     setMinConfidence,
     minNovelty,
@@ -67,18 +61,10 @@ export default function Filters({
     setSelectedCategory,
     availableCategories,
     updates,
-    filteredUpdates,
-    mobile
+    filteredUpdates
 }) {
-    const Container = mobile ? 'div' : 'aside';
-    const containerClasses = mobile
-        ? 'h-full flex flex-col bg-[#0f1422]'
-        : `hidden lg:flex flex-col border-l border-slate-800 bg-[#0f1422] transition-all duration-300 ${rightOpen ? 'w-80' : 'w-0 overflow-hidden opacity-0'}`;
-
-    const active = minRelevance > 0 || minConfidence > 0 || minNovelty > 0
-        || selectedSession !== 'ALL' || selectedSource !== 'ALL' || selectedCategory !== 'ALL';
-
-    const tierCount = (min) => updates.filter(u => (u.relevanceScore || 0) >= min).length;
+    if (!open) return null;
+    const active = activeFilterCount({ minRelevance, minConfidence, minNovelty, selectedSession, selectedSource, selectedCategory }) > 0;
 
     const tagCounts = {};
     updates.forEach(u => (u.tags || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; }));
@@ -87,9 +73,17 @@ export default function Filters({
         .sort((a, b) => (tagCounts[b] || 0) - (tagCounts[a] || 0));
 
     return (
-        <Container className={containerClasses}>
-            <div className={`px-6 ${mobile ? 'pt-0' : 'pt-6'} pb-4 border-b border-slate-800 whitespace-nowrap overflow-hidden`}>
-                {!mobile && <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Feed Filters</h2>}
+        <div className="fixed inset-0 z-50" onClick={onClose}>
+          <div className="absolute inset-0 bg-black/60" />
+          <div
+            className="absolute inset-x-0 bottom-0 max-h-[85dvh] rounded-t-2xl lg:inset-x-auto lg:right-0 lg:top-0 lg:bottom-0 lg:max-h-none lg:w-96 lg:rounded-none flex flex-col bg-[#0f1422] border-t lg:border-t-0 lg:border-l border-slate-800 pb-[env(safe-area-inset-bottom)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-4 pb-3 border-b border-slate-800 whitespace-nowrap">
+                <div className="flex items-center justify-between mb-1">
+                    <h2 className="text-sm font-bold text-slate-300 uppercase tracking-wider">Filters</h2>
+                    <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-200"><X size={20} /></button>
+                </div>
                 <div className="flex items-center justify-between">
                     <span className="text-sm text-slate-400">
                         <span className="font-mono text-indigo-300">{filteredUpdates.length}</span> of <span className="font-mono text-slate-300">{updates.length}</span> shown
@@ -102,17 +96,7 @@ export default function Filters({
                 </div>
             </div>
 
-            <div className="p-6 flex-1 flex flex-col space-y-6 overflow-y-auto whitespace-nowrap overflow-x-hidden">
-
-                <Section label="Priority">
-                    <div className="grid grid-cols-2 gap-1.5">
-                        {PRIORITY_TIERS.map(t => (
-                            <Chip key={t.min} active={minRelevance === t.min} onClick={() => setMinRelevance(t.min)}>
-                                {t.label} <span className="font-mono opacity-60">{tierCount(t.min)}</span>
-                            </Chip>
-                        ))}
-                    </div>
-                </Section>
+            <div className="p-5 flex-1 flex flex-col space-y-6 overflow-y-auto whitespace-nowrap overflow-x-hidden">
 
                 <Section label="Thresholds">
                     <div className="space-y-4">
@@ -129,7 +113,7 @@ export default function Filters({
                 </Section>
 
                 <Section label="Tags" hint={selectedCategory !== 'ALL' ? selectedCategory : null}>
-                    <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto scrollbar-thin pr-1">
+                    <div className="flex flex-wrap gap-1.5">
                         {categories.map(cat => (
                             <Chip key={cat} active={selectedCategory === cat} onClick={() => setSelectedCategory(selectedCategory === cat ? 'ALL' : cat)}>
                                 {cat} <span className="font-mono opacity-60">{tagCounts[cat] || 0}</span>
@@ -138,6 +122,7 @@ export default function Filters({
                     </div>
                 </Section>
             </div>
-        </Container>
+          </div>
+        </div>
     );
 }
