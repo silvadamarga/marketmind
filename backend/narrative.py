@@ -17,6 +17,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from database import get_db_connection
+from story import MACRO_CATS
 
 WINDOW_DAYS = 14           # how far back a story's events are gathered
 MIN_EVENTS = 4             # accumulation gate — fewer = no card (not yet a story)
@@ -34,6 +35,13 @@ HEADLINE_SHIFT = 0.30      # single headline this far from story centroid -> cou
 HEADLINE_NUDGE = 0.24      # this far -> develops the story (calibrated: consistent Iran-deal
                            # repeats cluster ~0.17-0.24, off-thread/new events ~0.30-0.41)
 MAX_SYNTH_PER_BUILD = 5     # cost cap: at most N Gemini calls per build
+# --- bull/bear board (2026-11-21): counted from each headline's ingest-time
+# sentiment label, so every tilt traces back to headlines anyone can recount ---
+RECENT_DAYS = 3            # "now" side of the swing: last 72h vs the rest of the window
+SWING_MIN_EVENTS = 5       # both sides need this many headlines or the swing is None
+HEAT_WEEKS = 4             # a story's normal weekly volume = the 4 weeks before this one
+MARKET_SHARE = 0.5         # a ticker whose news is mostly MACRO/GEO/CB is a market proxy
+                           # (GBP, FTSE, SPY, GLD), not a company story
 TOPIC_SNAP_THETA = 0.12    # topic-centroid cosine distance under which a smaller fine topic
                            # is aliased onto a bigger near-duplicate one (calibrated 2026-07-17:
                            # true duplicate pairs sit <=0.115 — us_iran_relations/us_iran_tensions
@@ -87,8 +95,26 @@ CREATE TABLE IF NOT EXISTS narratives (
 """
 
 
+_CREATE_TILT = """
+CREATE TABLE IF NOT EXISTS narrative_tilt_history (
+    as_of       TEXT NOT NULL,        -- UTC build day; first build of the day wins
+    entity_type TEXT NOT NULL,
+    entity      TEXT NOT NULL,
+    lane        TEXT,                 -- stock | market | theme | mood
+    n INTEGER, bull INTEGER, bear INTEGER, flat INTEGER,
+    tilt INTEGER,                     -- (bull - bear) / n * 100 over the window
+    recent_n INTEGER, recent_tilt INTEGER,
+    swing INTEGER,                    -- recent tilt minus the earlier window's tilt
+    model_direction TEXT, model_confidence INTEGER, model_as_of TEXT,
+    built_at TEXT NOT NULL,
+    PRIMARY KEY (as_of, entity_type, entity)
+)
+"""
+
+
 def _ensure(cur):
     cur.execute(_CREATE)
+    cur.execute(_CREATE_TILT)
     # additive migration for the LLM-synthesis layer (idempotent)
     for col, decl in (("centroid", "TEXT"), ("synthesis_json", "TEXT"),
                       ("last_synth", "TEXT"), ("aliases", "TEXT")):
@@ -128,7 +154,7 @@ def _rows_for(cur, column, value, since, exclude_topics=None):
     `exclude_topics` drops events already claimed by a qualifying fine topic — used
     so a category catch-all card doesn't double-count events that have their own card."""
     values = list(value) if isinstance(value, (list, tuple)) else [value]
-    sql = (f"SELECT title, body, ai_analysis_json, category, impact_score, "
+    sql = (f"SELECT title, body, ai_analysis_json, category, impact_score, sentiment, "
            f"timestamp, source_app, embedding FROM news_events "
            f"WHERE {column} IN ({','.join('?' * len(values))}) AND timestamp >= ? "
            f"AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) ")
@@ -141,8 +167,71 @@ def _rows_for(cur, column, value, since, exclude_topics=None):
     return cur.fetchall()
 
 
-def _card(entity_type, entity, rows):
-    """Build one direction-free digest card from an entity's recent events."""
+_SENT = {"BULLISH": "bull", "BEARISH": "bear"}
+
+
+def _utc(iso):
+    t = datetime.fromisoformat(iso)
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def _tilt(events):
+    """(bull - bear) / all headlines, -100..+100; neutral headlines dilute it.
+    None when there are no headlines."""
+    if not events:
+        return None
+    bull = sum(e["sentiment"] == "bull" for e in events)
+    bear = sum(e["sentiment"] == "bear" for e in events)
+    return round(100 * (bull - bear) / len(events))
+
+
+def _mood(parsed, now):
+    """The story's bull/bear tally: whole window, last RECENT_DAYS vs the rest (the
+    swing), and one bar per UTC day. Counted, not judged: each headline's
+    sentiment label was set once at ingest."""
+    cut = now - timedelta(days=RECENT_DAYS)
+    recent, prior = [], []
+    for e in parsed:
+        try:
+            (recent if _utc(e["date"]) >= cut else prior).append(e)
+        except (ValueError, TypeError):
+            prior.append(e)
+    rt, pt = _tilt(recent), _tilt(prior)
+    swing = (rt - pt if len(recent) >= SWING_MIN_EVENTS and len(prior) >= SWING_MIN_EVENTS
+             else None)
+    count = Counter(e["sentiment"] for e in parsed)
+    daily = []
+    for i in range(WINDOW_DAYS - 1, -1, -1):
+        d = (now - timedelta(days=i)).date().isoformat()
+        c = Counter(e["sentiment"] for e in parsed if (e["date"] or "")[:10] == d)
+        daily.append({"d": d, "bull": c["bull"], "bear": c["bear"], "flat": c["flat"]})
+    return {"n": len(parsed), "bull": count["bull"], "bear": count["bear"],
+            "flat": count["flat"], "tilt": _tilt(parsed),
+            "recent": {"n": len(recent), "tilt": rt}, "prior": {"n": len(prior), "tilt": pt},
+            "swing": swing, "daily": daily}
+
+
+def _heat(cur, column, value, now):
+    """This week's headline count against the story's own normal week (the
+    HEAT_WEEKS before it). x is None when the story had no news before this week."""
+    values = list(value) if isinstance(value, (list, tuple)) else [value]
+    wk = (now - timedelta(days=7)).isoformat()
+    since = (now - timedelta(days=7 * (HEAT_WEEKS + 1))).isoformat()
+    r = cur.execute(
+        f"SELECT COALESCE(SUM(timestamp >= ?), 0) wk, COALESCE(SUM(timestamp < ?), 0) prior "
+        f"FROM news_events WHERE {column} IN ({','.join('?' * len(values))}) AND timestamp >= ? "
+        f"AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING'))",
+        (wk, wk, *values, since)).fetchone()
+    norm = r["prior"] / HEAT_WEEKS
+    return {"week": r["wk"], "norm": round(norm, 1),
+            "x": round(r["wk"] / norm, 1) if norm else None}
+
+
+def _card(entity_type, entity, rows, lane=None, now=None):
+    """Build one digest card from an entity's recent events: the factual skeleton
+    plus its counted bull/bear tally. `lane` is theme/mood for topics; a stock's
+    lane is decided here from what its news is about."""
+    now = now or datetime.now(timezone.utc)
     parsed = []
     for r in rows:
         ai = {}
@@ -159,7 +248,8 @@ def _card(entity_type, entity, rows):
             "impact": r["impact_score"] or 0,
             "novelty": ai.get("novelty_score") or 0,    # lives in ai_analysis_json
             "tags": ai.get("ml_tags") or [],
-            # sentiment_label deliberately NOT carried — no direction on the card
+            "category": r["category"],
+            "sentiment": _SENT.get(r["sentiment"] or ai.get("sentiment_label"), "flat"),
         })
 
     # Developments blend RECENCY and MAGNITUDE so the story tracks the current
@@ -179,11 +269,12 @@ def _card(entity_type, entity, rows):
             break
     top = sorted(picks, key=lambda e: e["date"], reverse=True)
     developments = [{"date": e["date"], "headline": e["headline"],
-                     "source": e["source"]} for e in top]
+                     "source": e["source"], "sentiment": e["sentiment"]} for e in top]
     # the single newest event — the "what just changed" shown on the card face
     newest = parsed[0] if parsed else None
     latest_update = ({"date": newest["date"], "headline": newest["headline"],
-                      "source": newest["source"], "impact": newest["impact"]}
+                      "source": newest["source"], "impact": newest["impact"],
+                      "sentiment": newest["sentiment"]}
                      if newest else None)
 
     themes = [t for t, _ in Counter(t for e in parsed for t in e["tags"]).most_common(6)]
@@ -197,6 +288,10 @@ def _card(entity_type, entity, rows):
         except (ValueError, TypeError):
             span_days = None
 
+    if lane is None:
+        macro = sum(e["category"] in MACRO_CATS for e in parsed)
+        lane = "market" if parsed and macro / len(parsed) > MARKET_SHARE else "stock"
+
     label = entity if entity_type == "stock" else entity.replace("_", " ").title()
     summary = (f"{len(parsed)} development{'s' if len(parsed) != 1 else ''} on {label} "
                f"over {span_days if span_days is not None else '—'} days, "
@@ -208,8 +303,9 @@ def _card(entity_type, entity, rows):
         "developments": developments, "themes": themes,
         "event_count": len(parsed), "source_count": len(sources),
         "first_seen": first_seen, "last_seen": last_seen,
-        "as_of": datetime.now(timezone.utc).date().isoformat(),
-        "note": "factual story digest — context only, no buy/sell or forecast",
+        "lane": lane, "mood": _mood(parsed, now),
+        "as_of": now.date().isoformat(),
+        "note": "story digest + headline bull/bear tally — mood, not a measured price edge",
     }
 
 
@@ -352,16 +448,18 @@ def build_narratives(synthesize=True):
         cur.execute(catch_sql, catch_params)
         catch_cats = [r["e"] for r in cur.fetchall()]
 
-        for etype, col, ents, excl in (
-                ("stock", "related_ticker", stocks, None),
-                ("topic", "topic", fine_topics, None),
-                ("topic", "category", catch_cats, claimed or None)):
+        for etype, col, ents, excl, lane in (
+                ("stock", "related_ticker", stocks, None, None),
+                ("topic", "topic", fine_topics, None, "theme"),
+                ("topic", "category", catch_cats, claimed or None, "mood")):
             for ent in ents:
                 names = [ent, *topic_aliases.get(ent, ())] if col == "topic" else ent
                 rows = _rows_for(cur, col, names, since, exclude_topics=excl)
                 if len(rows) < MIN_EVENTS:
                     continue
-                card = _card(etype, ent, rows)
+                card = _card(etype, ent, rows, lane=lane, now=now)
+                # a catch-all's own norm would count events its fine topics now own
+                card["heat"] = _heat(cur, col, names, now) if lane != "mood" else None
                 aliases = topic_aliases.get(ent, []) if col == "topic" else []
                 if aliases:
                     card["aliases"] = aliases
@@ -385,7 +483,7 @@ def build_narratives(synthesize=True):
                     (etype, ent, json.dumps(card), card["event_count"], card["last_seen"],
                      now.isoformat(), json.dumps(centroid) if centroid else None,
                      json.dumps(aliases) if aliases else None))
-                built.append((etype, ent, card["event_count"]))
+                built.append(card)
 
                 if synthesize:
                     trig, reason, drift = _synth_trigger(stored, card, centroid, now)
@@ -427,6 +525,21 @@ def build_narratives(synthesize=True):
             conn.commit()
             synthesized.append((etype, ent, reason))
 
+        # the tilt ledger: one immutable row per story per UTC day (first build
+        # wins), so whether a tilt or a model call meant anything can be scored
+        # later from what was on the board that day, never from a rebuilt card
+        for card in built:
+            m, syn = card["mood"], card.get("synthesis") or {}
+            cur.execute(
+                "INSERT OR IGNORE INTO narrative_tilt_history VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now.date().isoformat(), card["entity_type"], card["entity"], card["lane"],
+                 m["n"], m["bull"], m["bear"], m["flat"], m["tilt"],
+                 m["recent"]["n"], m["recent"]["tilt"], m["swing"],
+                 syn.get("direction"), syn.get("confidence"), syn.get("as_of"),
+                 now.isoformat()))
+        conn.commit()
+
     return {"built": len(built), "synthesized": len(synthesized),
             "synth_entities": synthesized, "gated_candidates": len(candidates)}
 
@@ -464,7 +577,17 @@ def _light(card):
         "has_synthesis": bool(card.get("synthesis")),
         "priority": syn.get("priority"),
         "one_liner": syn.get("one_liner"),
+        # --- bull/bear board (absent on cards built before 2026-11-21) ---
+        "lane": card.get("lane") or _old_lane(card),
+        "mood": card.get("mood"), "heat": card.get("heat"),
+        "model_as_of": syn.get("as_of"),
     }
+
+
+def _old_lane(card):
+    if card["entity_type"] == "stock":
+        return "stock"
+    return "mood" if card["entity"] in TOPIC_CATEGORIES else "theme"
 
 
 def get_narratives(limit=50):
@@ -489,3 +612,73 @@ def get_narrative(entity_type, entity):
             "SELECT narrative_json FROM narratives WHERE entity_type=? AND entity=?",
             (entity_type, entity)).fetchone()
         return json.loads(row["narrative_json"]) if row else None
+
+
+def _book():
+    """{ticker: 'held'|'watch'} from the Live desk's snapshot (live.json, pushed by
+    the forge). Empty when the file is absent — then the board shows no marks."""
+    try:
+        import live
+        snap = live._load_file() or {}
+    except Exception:
+        return {}, None
+    marks = {}
+    for r in snap.get("rows", []):
+        sets = r.get("sets") or ""
+        marks[r["ticker"]] = "held" if "held" in sets.split() else "watch"
+    return marks, snap.get("book_at")
+
+
+def get_board(now=None):
+    """The Narratives tab: every story the latest build carried, the catch-all
+    categories as mood gauges, and the whole news tape's own tilt —
+    last RECENT_DAYS against the full window — as the header."""
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=WINDOW_DAYS)).isoformat()
+    cut = (now - timedelta(days=RECENT_DAYS)).isoformat()
+    marks, book_at = _book()
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        _ensure(cur)
+        # one build stamps every card it wrote with the same updated_at; a card
+        # from an older build is a story that fell under the gate since, and its
+        # tally would be frozen at that build's counts
+        rows = cur.execute(
+            "SELECT narrative_json, updated_at FROM narratives "
+            "WHERE updated_at = (SELECT max(updated_at) FROM narratives) "
+            "ORDER BY last_seen DESC").fetchall()
+        tape = cur.execute(
+            "SELECT sentiment, substr(timestamp, 1, 10) d, timestamp >= ? recent, COUNT(*) n "
+            "FROM news_events WHERE timestamp >= ? "
+            "AND (category IS NULL OR category NOT IN ('SENTIMENT','RATING')) "
+            "GROUP BY 1, 2, 3", (cut, since)).fetchall()
+
+    events = [{"sentiment": _SENT.get(r["sentiment"], "flat"), "d": r["d"], "recent": r["recent"]}
+              for r in tape for _ in range(r["n"])]
+    recent = [e for e in events if e["recent"]]
+    prior = [e for e in events if not e["recent"]]
+    daily = []
+    for i in range(WINDOW_DAYS - 1, -1, -1):
+        d = (now - timedelta(days=i)).date().isoformat()
+        c = Counter(e["sentiment"] for e in events if e["d"] == d)
+        daily.append({"d": d, "bull": c["bull"], "bear": c["bear"], "flat": c["flat"]})
+    rt, pt = _tilt(recent), _tilt(prior)
+    count = Counter(e["sentiment"] for e in events)
+
+    cards, gauges = [], []
+    for r in rows:
+        c = _light(json.loads(r["narrative_json"]))
+        c["mine"] = marks.get(c["entity"]) if c["entity_type"] == "stock" else None
+        (gauges if c["lane"] == "mood" else cards).append(c)
+    return {
+        "as_of": now.isoformat(),
+        "built_at": max((r["updated_at"] for r in rows), default=None),
+        "book_at": book_at,
+        "tape": {"n": len(events), "bull": count["bull"], "bear": count["bear"],
+                 "flat": count["flat"], "tilt": _tilt(events),
+                 "recent": {"n": len(recent), "tilt": rt}, "prior": {"n": len(prior), "tilt": pt},
+                 "swing": rt - pt if rt is not None and pt is not None else None,
+                 "daily": daily},
+        "gauges": gauges, "cards": cards,
+        "window_days": WINDOW_DAYS, "recent_days": RECENT_DAYS,
+    }

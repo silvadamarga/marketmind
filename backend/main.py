@@ -424,6 +424,17 @@ def list_narratives(limit: int = 50):
         print(f"Narratives error: {e}")
         return []
 
+@app.get("/api/narratives/board")
+def narratives_board():
+    """The Narratives tab: live stories with their counted bull/bear tally, the
+    category mood gauges, the whole tape's tilt, and book marks from live.json."""
+    try:
+        import narrative
+        return json_safe(narrative.get_board())
+    except Exception as e:
+        print(f"Narratives board error: {e}")
+        return {"cards": [], "gauges": [], "tape": None, "error": str(e)}
+
 @app.get("/api/narratives/{entity_type}/{entity}")
 def get_narrative_detail(entity_type: str, entity: str):
     """Full narrative for one entity (all developments + LLM story arc) — loaded

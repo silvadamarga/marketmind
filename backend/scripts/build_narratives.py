@@ -1,25 +1,20 @@
-"""Weekly narrative rebuild — the card layer on a schedule instead of a button.
+"""Narrative rebuild — the card layer on a schedule instead of a button.
 
-Until now `build_narratives` only ever fired from the frontend's
-POST /api/narratives/build, so the cards were as fresh as the last time someone
-pressed it: on 2026-07-31 the newest card read `updated_at 2026-07-28`, covering
-nothing in that day's news window. A story-so-far layer that trails the story by
-three days is decoration.
-
-Cadence is weekly, which the window sizes: cards gather WINDOW_DAYS (14) of
-events, so a 7-day rebuild leaves a card at most half its own window stale.
-SYNTH_DEBOUNCE_HOURS (48) never binds at this cadence.
+Until 2026-07-31 `build_narratives` only fired from the frontend's
+POST /api/narratives/build, so the cards were as fresh as the last press. It
+then ran weekly (Mondays); since 2026-11-21 the Narratives tab is a bull/bear
+board whose tallies count the last 72h, so it runs daily at 04:20 UTC with
+synthesis, and again 13:20 UTC on weekdays (08:20 ET, before the US open)
+with --no-synth.
 
 Cost: the deterministic pass is free — pure aggregation of facts Gemini already
 extracted at ingest. Only the gated synthesis pass calls the API, capped at
-MAX_SYNTH_PER_BUILD (5) per run, so this job's ceiling is 5 calls/week (measured
-~$0.011 each = ~$0.06/month; the whole Gemini bill ran $2.57 over the 30 days to
-2026-07-31, 68% of it per-headline `analysis`). Run with --no-synth for a
-zero-token rebuild.
+MAX_SYNTH_PER_BUILD (5) per run and SYNTH_DEBOUNCE_HOURS (48) per story, and only
+the 04:20 run synthesizes: ceiling 5 calls/day (~$0.011 each, so <= ~$1.7/month).
 
-Run from backend/ via cron on the production server, Mondays at 04:20 UTC —
 04:15 is taken by the notifier system's own backup, and the two share a disk:
-    20 4 * * 1 cd /path/to/backend && venv/bin/python scripts/build_narratives.py
+    20 4 * * *   cd /path/to/backend && venv/bin/python scripts/build_narratives.py
+    20 13 * * 1-5 cd /path/to/backend && venv/bin/python scripts/build_narratives.py --no-synth
 Local test: venv/bin/python scripts/build_narratives.py --no-synth
 """
 
