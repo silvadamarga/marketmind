@@ -97,7 +97,7 @@ export default function MarketMindDashboard() {
       if (!searchQuery) {
           const sigRes = await fetch(`${API_BASE}/api/signals`);
           if (sigRes.ok) setSignals(await sigRes.json());
-          setLastConnection(new Date().toLocaleTimeString());
+          setLastConnection(new Date().toLocaleTimeString('en-GB'));
       }
       setLoading(false);
     } catch (err) {

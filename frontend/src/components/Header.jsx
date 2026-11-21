@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Activity } from 'lucide-react';
 
 import UniverseBar from './UniverseBar';
 import { tabLabel } from '../utils/nav';
@@ -25,15 +24,15 @@ function MarketClocks() {
         return () => clearInterval(id);
     }, []);
     return (
-        <div className="flex items-center gap-3 font-mono text-[11px]">
+        <div className="flex items-center gap-2.5 sm:gap-3 font-mono text-[11px]">
             {MARKETS.map(m => {
                 const z = zoned(now, m.tz);
                 const isOpen = !['Sat', 'Sun'].includes(z.weekday) && z.mins >= m.open && z.mins < m.close;
                 return (
                     <span key={m.label} className="flex items-center gap-1.5" title={`${m.tz} · ${isOpen ? 'open' : 'closed'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-emerald-400' : 'bg-slate-600'}`} />
                         <span className="text-slate-500">{m.label}</span>
                         <span className="text-slate-300">{z.hhmm}</span>
+                        <span className={`text-[9px] font-bold tracking-wide px-1 rounded ${isOpen ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-700/40 text-slate-500'}`}>{isOpen ? 'OPEN' : 'CLOSED'}</span>
                     </span>
                 );
             })}
@@ -54,7 +53,6 @@ export default function Header({
         <header className="flex flex-col border-b border-slate-800 bg-[#0f1422] w-full z-30 shrink-0">
             <div className="h-12 lg:h-14 flex items-center justify-between px-4 lg:px-6 border-b border-slate-800/50 w-full">
                 <div className="flex items-center gap-2.5 min-w-0">
-                    <Activity className="lg:hidden text-indigo-400 shrink-0" size={20} />
                     <h1 className="text-base lg:text-xl font-semibold text-white truncate">{tabLabel(activeTab)}</h1>
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
