@@ -26,6 +26,42 @@ STORY_WINDOW_HOURS = 48     # how far back a new row looks for its story
 MACRO_CATS = {"MACRO", "GEOPOLITICS", "CENTRAL_BANK"}
 
 
+# Novelty (tagger v2): how unlike everything in the last STORY_WINDOW_HOURS a
+# headline is, from its closest neighbour's cosine. Anchors from the 30 days to
+# 2026-11-21 (4,174 deduped rows): 5% sit at or under 0.55 and 5% at or over 0.93,
+# median 0.71. Linear between, so the median lands on ~6 like the model's old
+# 1-10 scale. The model's own novelty did not fall for repeats of a story (mean
+# 5.4 first headline, 6.5 fourth+), so it was not measuring this.
+NOVELTY_SIM_NEW = 0.55      # at or below: 10
+NOVELTY_SIM_OLD = 0.93      # at or above: 1
+
+
+def novelty_from_sim(max_sim):
+    """1-10 novelty from the best cosine to any recent headline (None = nothing recent)."""
+    if max_sim is None:
+        return 10
+    frac = (max_sim - NOVELTY_SIM_NEW) / (NOVELTY_SIM_OLD - NOVELTY_SIM_NEW)
+    return int(max(1, min(10, round(10 - 9 * frac))))
+
+
+def novelty(cursor, blob, timestamp):
+    """novelty_score for a headline about to be stored at `timestamp`, or None
+    when it has no embedding (readers treat a missing novelty as unknown)."""
+    if blob is None:
+        return None
+    ts = datetime.datetime.fromisoformat(timestamp)
+    since = (ts - datetime.timedelta(hours=STORY_WINDOW_HOURS)).isoformat()
+    cursor.execute(
+        "SELECT title_embedding FROM news_events WHERE timestamp >= ? AND timestamp < ? "
+        "AND title_embedding IS NOT NULL", (since, timestamp))
+    rows = cursor.fetchall()
+    if not rows:
+        return novelty_from_sim(None)
+    v = np.frombuffer(blob, dtype=np.float32)
+    sims = np.frombuffer(b"".join(r[0] for r in rows), dtype=np.float32).reshape(len(rows), -1) @ v
+    return novelty_from_sim(float(sims.max()))
+
+
 def to_blob(vec_json):
     """get_text_embedding's JSON string -> unit-norm float32 bytes, or None."""
     if not vec_json:

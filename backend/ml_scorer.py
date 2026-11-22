@@ -114,8 +114,8 @@ def score_event(analysis, macro_data, session, sector_json):
         feats["sentiment"] = SENTIMENT_ORD.get(sent, float("nan"))
         feats["impact"] = _era_map("impact", _to_float(analysis.get("impact_score")))
         feats["novelty"] = _era_map("novelty", _to_float(analysis.get("novelty_score")))
-        conf = _to_float(analysis.get("confidence") or analysis.get("ai_confidence"))
-        feats["confidence"] = CONFIDENCE_TRAIN_MEAN if not math.isnan(conf) else conf
+        # Tagger v2 (2026-11-21) emits no confidence; v1's carried no variance.
+        feats["confidence"] = CONFIDENCE_TRAIN_MEAN
 
         macro = macro_data or {}
         for k in ["market_vix", "yield_10y", "price_dxy", "spy_200d_sma_dist",

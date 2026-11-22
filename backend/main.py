@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import bot_logic
 import ingestor
 import monitor
-from database import init_db, DB_FILE, get_db_connection, json_safe
+from database import init_db, DB_FILE, get_db_connection, json_safe, is_duplicate
 from config import NOTIF_INGEST_TOKEN, NOTIF_DEDUPE_WINDOW_S
 
 # --- LIFECYCLE MANAGER ---
@@ -505,13 +505,9 @@ def ingest_notification(payload: dict, authorization: str = Header(None)):
     if not title and not body:
         raise HTTPException(status_code=400, detail="empty notification")
 
-    cutoff = (datetime.datetime.now(datetime.timezone.utc)
-              - datetime.timedelta(seconds=NOTIF_DEDUPE_WINDOW_S)).isoformat()
+    # Early exit only; the race-proof check is the worker's (bot_logic step 1c).
     with get_db_connection() as conn:
-        dup = conn.execute(
-            """SELECT 1 FROM news_events
-               WHERE source_app = ? AND title = ? AND body = ? AND timestamp >= ?
-               LIMIT 1""", (source, title, body, cutoff)).fetchone()
+        dup = is_duplicate(conn, title, body, NOTIF_DEDUPE_WINDOW_S)
     if dup:
         return {"status": "duplicate"}
 

@@ -208,6 +208,39 @@ def log_market_data(timestamp, ticker_data):
     except Exception as e:
         print(f"⚠️ Market Data Logging Failed: {e}")
 
+def dedupe_key(title, body):
+    """What makes two notifications the same: the headline text (`body`, or
+    `title` when the body is empty), case- and edge-whitespace-insensitive.
+    The source label is NOT part of it: the Pushbullet and adb legs label the
+    same Investing push "Investing" and "Investing.com" ~5s apart, and Ground
+    News reposts CNBC/Reuters headlines verbatim."""
+    return ((body or "").strip() or (title or "").strip()).lower()
+
+
+def is_duplicate(conn, title, body, window_s):
+    """True when a row with the same dedupe_key was stored in the last window_s
+    seconds. Read by the single news worker right before tagging, so a copy
+    that arrives while the first is still being tagged is still caught."""
+    key = dedupe_key(title, body)
+    if not key:
+        return False
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(seconds=window_s)).isoformat()
+    # Compared in Python: SQLite's lower() folds ASCII only.
+    return any(dedupe_key(t, b) == key for t, b in conn.execute(
+        "SELECT title, body FROM news_events WHERE timestamp >= ?", (since,)))
+
+
+def active_topics(conn, days=7, limit=40):
+    """The most-used topics of the last `days`, for the tagger to reuse."""
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=days)).isoformat()
+    return [r[0] for r in conn.execute(
+        """SELECT topic FROM news_events WHERE timestamp >= ? AND topic IS NOT NULL
+           AND topic != '' GROUP BY topic ORDER BY COUNT(*) DESC LIMIT ?""",
+        (since, limit))]
+
+
 def log_news_event(data_pack, analysis, embedding=None, macro_context=None, micro_regime=None, session_phase=None, sector_json=None, ml_score=None, title_embedding=None):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     # Deep clean input analysis to prevent NaN errors on storage

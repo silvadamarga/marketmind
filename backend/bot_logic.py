@@ -3,9 +3,11 @@ import queue
 import time
 import threading
 from config import (IMPACT_THRESHOLD_HIGH, NOVELTY_THRESHOLD_HIGH,
-                    ALERT_IMPACT_RATE, ALERT_NOVELTY_RATE, ALERT_WINDOW_DAYS, ALERT_MIN_ROWS)
-from database import log_news_event, safe_round, get_db_connection
-from analysis import get_gemini_analysis, get_text_embedding
+                    ALERT_IMPACT_RATE, ALERT_NOVELTY_RATE, ALERT_WINDOW_DAYS, ALERT_MIN_ROWS,
+                    NOTIF_DEDUPE_WINDOW_S)
+from database import (log_news_event, safe_round, get_db_connection, is_duplicate,
+                      active_topics)
+from analysis import get_gemini_analysis, get_text_embedding, rule_tag
 import story
 from ml_scorer import score_event
 import monitor
@@ -101,10 +103,11 @@ def get_micro_regime(analysis):
                 }
     return micro_regime
 
-def handle_logging(task, analysis, full_text, macro_data, micro_regime, session, sector_json, source_app, title, ml_score=None):
+def handle_logging(task, analysis, full_text, macro_data, micro_regime, session, sector_json, source_app, title, ml_score=None, title_embedding=None):
     """Stores the analysed event. Sends nothing: the per-item alert card was
     retired 2026-09-04 in favour of the windowed summary
-    (scripts/news_rollup.py), which reads these rows."""
+    (scripts/news_rollup.py), which reads these rows. `title_embedding` is the
+    worker's headline vector (story grouping + novelty), computed before tagging."""
     if not analysis:
         return
 
@@ -113,9 +116,6 @@ def handle_logging(task, analysis, full_text, macro_data, micro_regime, session,
     impact = analysis.get("impact_score", 0)
     if impact >= 5: # Threshold for "worth remembering"
         embedding = get_text_embedding(full_text)
-    # Every row, for story grouping (story.py). The headline is `body`; `title`
-    # is the source name ("Investing.com", "CNBC").
-    title_embedding = story.to_blob(get_text_embedding(task.get("body") or task.get("title")))
 
     log_news_event(
         task,
@@ -144,16 +144,34 @@ def process_news_queue():
                 NEWS_QUEUE.task_done()
                 continue
 
+            # 1c. Drop a repeat of a headline stored in the dedupe window. Checked
+            # here, in the one worker thread, because the row only exists once
+            # tagging is done: the ingest-time check misses a copy that arrives
+            # seconds later (31% of rows were such copies before 2026-11-21).
+            with get_db_connection() as conn:
+                dup = is_duplicate(conn, title, body, NOTIF_DEDUPE_WINDOW_S)
+                topics = None if dup else active_topics(conn)
+            if dup:
+                print(f"♻️ Duplicate dropped: {(body or title)[:50]}")
+                NEWS_QUEUE.task_done()
+                continue
+
             full_text = f"{title} {body}"
-            
+
             # 2. Fetch Context
             macro_data, session, sector_json = fetch_market_context()
-            
+
+            # 2b. Headline vector first: story grouping and novelty both need it.
+            # The headline is `body`; `title` is usually the source name.
+            title_embedding = story.to_blob(get_text_embedding(body or title))
+
             print(f"🔍 Analyzing: {title[:40]}...")
-            
-            # 3. Analyze
-            analysis, raw_resp = get_gemini_analysis(title, body, source_app)
-            
+
+            # 3. Analyze: a templated price notice by rule, everything else by model
+            analysis = rule_tag(body)
+            if analysis is None:
+                analysis, raw_resp = get_gemini_analysis(title, body, source_app, topics=topics)
+
             # FALLBACK: If analysis failed (e.g. API Error), construct a basic object so it gets logged
             if not analysis:
                 print(f"⚠️ Analysis Failed for '{title[:20]}...', using fallback.")
@@ -165,8 +183,15 @@ def process_news_queue():
                     "confidence": 0,
                     "tickers": [],
                     "category": "UNCATEGORIZED",
-                    "status": "FAILED"
+                    "status": "FAILED",
+                    "error": raw_resp,
                 }
+            else:
+                # 3b. Novelty from how unlike the last 48h of headlines this one is.
+                with get_db_connection() as conn:
+                    analysis["novelty_score"] = story.novelty(
+                        conn.cursor(), title_embedding,
+                        datetime.datetime.now(datetime.timezone.utc).isoformat())
 
             # 4. Get Micro Regime
             micro_regime = get_micro_regime(analysis)
@@ -181,7 +206,8 @@ def process_news_queue():
             # 5. Log and Alert
             handle_logging(
                 task, analysis, full_text, macro_data, micro_regime,
-                session, sector_json, source_app, title, ml_score=ml_score
+                session, sector_json, source_app, title, ml_score=ml_score,
+                title_embedding=title_embedding
             )
 
             time.sleep(0.5)

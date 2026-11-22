@@ -1,3 +1,4 @@
+import datetime
 import json
 import time
 import re
@@ -18,15 +19,96 @@ from usage import log_usage
 #   flash-lite                        from this stamp — pinned model id, not the
 #   -latest alias, so a Google hot-swap can't silently change price or quality;
 #   if Google retires it, calls FAIL loudly and daily_health FAILED% catches it.
+#   tagger v2                         2026-11-21 — new era, never pool with the
+#   above: temperature 0, enforced schema, dated prompt with the active topic
+#   list, no model novelty/confidence (novelty from story.novelty), duplicates
+#   dropped before tagging, Investing price notices tagged by rule (RULE_CONFIG
+#   stamps the same era so a per-row era read keeps them together).
 ANALYSIS_MODEL = "gemini-3.1-flash-lite"
-ANALYSIS_LLM_CONFIG = "gemini-3.1-flash-lite/think0/2026-07-04"
+ANALYSIS_LLM_CONFIG = "gemini-3.1-flash-lite/think0/t0-schema/v2/2026-11-21"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+CATEGORIES = ["RATING", "MACRO", "CENTRAL_BANK", "GEOPOLITICS", "REGULATION",
+              "SENTIMENT", "CRYPTO", "REAL_ESTATE", "OTHER"]
+
+TAG_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "category": types.Schema(type=types.Type.STRING, enum=CATEGORIES),
+        "topic": types.Schema(type=types.Type.STRING),
+        "sentiment_label": types.Schema(type=types.Type.STRING,
+                                        enum=["BULLISH", "BEARISH", "NEUTRAL"]),
+        "impact_score": types.Schema(type=types.Type.INTEGER, minimum=0, maximum=10),
+        "tickers": types.Schema(type=types.Type.ARRAY, max_items=3,
+                                items=types.Schema(type=types.Type.STRING)),
+        "ml_tags": types.Schema(type=types.Type.ARRAY, max_items=4,
+                                items=types.Schema(type=types.Type.STRING)),
+    },
+    required=["category", "topic", "sentiment_label", "impact_score", "tickers", "ml_tags"],
+    property_ordering=["category", "topic", "sentiment_label", "impact_score",
+                       "tickers", "ml_tags"],
+)
+
 ANALYSIS_CONFIG = types.GenerateContentConfig(
     response_mime_type="application/json",
+    response_schema=TAG_SCHEMA,
+    temperature=0,
     thinking_config=types.ThinkingConfig(thinking_budget=0),
 )
+
+# Investing's templated price notices: "Zoetis Inc (ZTS) is down -5.05% to 81.25",
+# "Oracle (ORCL) sinks to a 52 Week low at 108.48", optionally followed by
+# "Check out ...'s live quote now". They restate a price, so the model's
+# BULLISH/BEARISH on them was the move itself. Anchored at the start so a real
+# headline that merely mentions a move never matches. "Earnings EPS: $x vs. $y
+# forecast" is news and stays with the model.
+_PRICE_ECHO = re.compile(
+    r"^.{1,80}?\((?P<ticker>[A-Z][A-Z0-9.]{0,9})\) "
+    r"(?:is (?:up|down|rising|falling|tanking|rallying|jumping|plunging|surging|"
+    r"sliding|soaring|sinking|climbing|dropping|gaining|losing|slumping|spiking) "
+    r"[-+]?[\d.,]+% to [\d.,]+"
+    r"|(?:sinks|jumps|falls|rises|climbs|drops) to an? \d+ Week (?:low|high) at [\d.,]+"
+    r"|(?:reached|hits) an? (?:\d+ Week (?:low|high)|all time (?:high|low)|"
+    r"Record-(?:High|Low) level) at [\d.,]+)")
+# Up to 20: a symbol, or a capitalised company name the forge resolver
+# (scraper/ticker_resolve.py) maps by name when the model does not know the symbol.
+_TICKER_OK = re.compile(r"^[A-Z][A-Z0-9.\-&]{0,19}$")
+# Index, exchange-as-index and currency symbols the v1 tagger emitted for
+# market-wide news; none is a company the row is about.
+_NOT_TICKERS = {"SPX", "NDX", "FTSE", "DAX", "DJI", "DJIA", "COMP", "IXIC", "VIX",
+                "GBP", "USD", "EUR", "JPY", "CNY", "USDJPY", "EURUSD", "GBPUSD",
+                "XAU", "XAG", "BTC", "ETH"}
+
+
+def rule_tag(body):
+    """Tag a templated price notice without a model call, or None if `body` is
+    not one. Same shape as a model tag, so every reader treats it alike."""
+    m = _PRICE_ECHO.match((body or "").strip())
+    if not m:
+        return None
+    return {"category": "SENTIMENT", "topic": "", "sentiment_label": "NEUTRAL",
+            "impact_score": 1, "tickers": [m.group("ticker")],
+            "ml_tags": ["price_action"], "method": "rule_price_echo",
+            "llm_config": ANALYSIS_LLM_CONFIG}
+
+
+def _clean_tags(data):
+    """Normalise a model tag: uppercase, de-duplicated, real-looking tickers only;
+    snake_case topic; impact clamped. The schema bounds the shape, this bounds
+    the content."""
+    tickers = []
+    for t in data.get("tickers") or []:
+        t = str(t).strip().upper().lstrip("$")
+        if t == "GOOG":
+            t = "GOOGL"
+        if _TICKER_OK.match(t) and t not in _NOT_TICKERS and t not in tickers:
+            tickers.append(t)
+    data["tickers"] = tickers[:3]
+    data["topic"] = re.sub(r"[^a-z0-9]+", "_", (data.get("topic") or "").strip().lower()).strip("_")
+    data["impact_score"] = max(0, min(10, int(data.get("impact_score") or 0)))
+    data["ml_tags"] = [str(x).strip().lower() for x in (data.get("ml_tags") or [])][:4]
+    return data
 
 # Daily report is long-form generation, not schema extraction — thinking stays on.
 REPORT_CONFIG = types.GenerateContentConfig(
@@ -54,21 +136,25 @@ def get_text_embedding(text):
         print(f"⚠️ Embedding failed: {e}")
         return None
 
-def get_gemini_analysis(title, body, source_app):
-    """
-    Single-Step Analysis: Analyzes the news event in one go to determine impact, sentiment, and context.
-    """
-    prompt = GEMINI_ANALYSIS_PROMPT.format(title=title, body=body)
+def get_gemini_analysis(title, body, source_app, topics=None, today=None):
+    """One model tag for one notification. `topics` is the active-topic list the
+    model should reuse (database.active_topics); `today` an ISO date, default
+    the current UTC date. Returns (tag, raw_text) or (None, error_text)."""
+    today = today or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    prompt = GEMINI_ANALYSIS_PROMPT.format(
+        today=today, source=source_app or "unknown", title=title or "", body=body or "",
+        topics=", ".join(topics) if topics else "(none yet)")
     try:
         response = client.models.generate_content(
             model=ANALYSIS_MODEL, contents=prompt, config=ANALYSIS_CONFIG)
         log_usage("analysis", response.usage_metadata, model=ANALYSIS_MODEL)  # highest-volume call
-        data = json.loads(clean_json_string(response.text))
+        data = _clean_tags(json.loads(clean_json_string(response.text)))
+        data["method"] = "llm"
         data["llm_config"] = ANALYSIS_LLM_CONFIG
         return data, response.text
     except Exception as e:
         print(f"❌ Analysis Error: {e}")
-        return None, str(e)
+        return None, str(e)[:300]
 
 def generate_narrative_synthesis(entity, events_text):
     """Grounded, direction-free 'story so far' for one entity. Returns the parsed

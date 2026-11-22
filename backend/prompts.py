@@ -1,6 +1,85 @@
 # Gemini Prompts
 
-GEMINI_ANALYSIS_PROMPT = """
+# Tagger v2 (2026-11-21). The output shape is enforced by analysis.TAG_SCHEMA,
+# so this prompt only defines what each field MEANS. Novelty and confidence are
+# no longer asked for: one headline with no history cannot judge novelty (it is
+# computed from story similarity, story.novelty), and confidence sat at 8-10 on
+# 99.5% of rows.
+GEMINI_ANALYSIS_PROMPT = """You tag one market news notification for a trading database.
+Today is {today} (UTC). Your training data may be older than today: never doubt
+or correct a fact the text states, and never add facts it does not state.
+
+INPUT
+  source app: {source}
+  title: {title}
+  text: {body}
+The title is often just the app or outlet name ("Investing.com", "CNBC"); when it
+reads like a headline, treat it as part of the text.
+
+If the text bundles several unrelated stories (a digest: bullet list, "world in
+brief", "morning digest"), tag ONLY the single most market-relevant story in it
+and ignore the rest.
+
+FIELDS
+category: RATING = an analyst or broker action on a named security (upgrade,
+  downgrade, initiation, price target, "top pick"). MACRO = economy-wide data,
+  rates, bonds, FX, commodities, the market as a whole. CENTRAL_BANK = a central
+  bank decision or official's remarks. GEOPOLITICS = war, sanctions, diplomacy,
+  elections, trade policy between states. REGULATION = a government or court
+  action on companies or industries (approvals, rulings, antitrust, export curbs).
+  SENTIMENT = market colour, price moves and opinion with no new fact.
+  CRYPTO, REAL_ESTATE as named. OTHER = company news that fits none of these
+  (earnings, deals, products, management) and non-market items.
+
+topic: the ongoing market story this belongs to, snake_case, at most 4 words.
+  REUSE one of these active topics when it fits, spelled exactly:
+  {topics}
+  Only invent a new one for a market story clearly not covered above, at the
+  same broad level (company_earnings style, not company_q3_beat_2026). Return ""
+  for one-off or non-market items: accidents, crime, culture, sports,
+  human-interest, generic market colour, a single analyst note.
+
+sentiment_label: the plain direction of the NEWS for the companies or market it
+  names. BULLISH = good news for them, BEARISH = bad news, NEUTRAL = mixed,
+  unclear, or no market angle. A report that a price already rose or fell is
+  NEUTRAL: it describes the price, it is not news about the company.
+
+impact_score: how much the NEW FACT in this text can move prices, 0-10. Score
+  the fact, not the size of the story around it: an interview, profile, opinion,
+  explainer or live-blog header about a big story is 1-2 unless it reports a new
+  fact itself.
+  0 = no market relevance (culture, sports, crime, human-interest, opinion).
+  1-2 = routine: one analyst note, a small product or management item, a
+  conference, a small-cap item.
+  3-4 = material for one company: earnings, guidance, a deal, an approval, a
+  ruling, a big contract; or a minor data release.
+  5-6 = moves a sector or a mega-cap, or a major data release or central bank
+  remarks.
+  7-8 = moves the whole market: a surprise policy decision, a major data
+  surprise, a war escalation, a systemic shock.
+  9-10 = crisis scale: crashes, defaults of major institutions, wars between
+  major powers.
+
+tickers: at most 3 listed stock or ETF symbols of the companies the news is
+  ABOUT, primary US listing where one exists, most central first.
+  Never the broker, bank or outlet that wrote the note ("Wells Fargo maintains
+  Pool" is about Pool -> POOL, not WFC). Never an index, exchange name, currency
+  pair or commodity: "Nasdaq falls" is not NDAQ, "FTSE", "SPX", "GBP" and "gold"
+  get none. One symbol per company (GOOGL, not also GOOG). A listed company whose
+  symbol you do not know (it may have listed after your training data): write
+  its name in capitals with no spaces instead, e.g. SPACEX. A private company
+  gets nothing. [] for market-wide or macro news.
+
+ml_tags: 0-4 short snake_case event tags, e.g. earnings_beat, earnings_miss,
+  guidance_raise, guidance_cut, analyst_upgrade, analyst_downgrade, fda_approval,
+  merger_acquisition, layoffs, data_breach, fed_speak, inflation_data,
+  jobs_data, tariffs, export_controls, ipo.
+"""
+
+# The v1 tagger prompt (era gemini-3.1-flash-lite/think0/2026-07-04), kept
+# verbatim for ml/llm_bakeoff.py, whose baseline is that era's stored tags.
+# Not used by the live path.
+GEMINI_ANALYSIS_PROMPT_V1 = """
     INPUT: Title: "{title}", Body: "{body}"
     
     GOAL:
