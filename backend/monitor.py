@@ -294,14 +294,16 @@ def vwap_monitor_loop():
                             daily_change = ((price - open_price) / open_price) * 100
 
                     # Prepare Data Object
+                    # FX moves live in the 4th-5th decimal (EUR/USD 1.0954)
+                    px = 5 if ticker.endswith('=X') else 2
                     data_obj = {
                         "ticker": ticker,
-                        "open": safe_round(latest['Open']),
-                        "high": safe_round(latest['High']),
-                        "low": safe_round(latest['Low']),
-                        "close": safe_round(latest['Close']),
+                        "open": safe_round(latest['Open'], px),
+                        "high": safe_round(latest['High'], px),
+                        "low": safe_round(latest['Low'], px),
+                        "close": safe_round(latest['Close'], px),
                         "volume": int(latest['Volume']),
-                        "vwap": safe_round(latest['VWAP']),
+                        "vwap": safe_round(latest['VWAP'], px),
                         "rsi": safe_round(latest['RSI'], 1),
                         "rvol": safe_round(latest['RVOL'], 1)
                     }
