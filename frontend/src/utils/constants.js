@@ -8,7 +8,8 @@ export const TICKER_NAMES = {
     'XLI': 'Industrials', 'XLB': 'Materials', 'XLRE': 'Real Estate',
     'XLC': 'Comm Svcs', 'SMH': 'Semiconductors', 'XBI': 'Biotech',
     'XRT': 'Retail', 'ITB': 'Homebuilders', 'JNK': 'Junk Bonds',
-    'GLD': 'Gold', 'SLV': 'Silver', 'USO': 'Crude Oil', 'TLT': '20Y Treasury'
+    'GLD': 'Gold', 'SLV': 'Silver', 'USO': 'Crude Oil', 'TLT': '20Y Treasury',
+    'EURUSD=X': 'EUR/USD', 'JPY=X': 'USD/JPY'
 };
 
 // --- Intraday Bias Read -------------------------------------------------

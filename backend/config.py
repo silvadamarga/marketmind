@@ -64,7 +64,10 @@ TICKER_MAP = {
     "XLB": "Materials", "XLRE": "Real Estate", "XLU": "Utilities",
     "SMH": "Semiconductors", "XBI": "Biotech", "XRT": "Retail", "ITB": "Homebuilders", "JNK": "Junk Bonds",
     "GLD": "Gold", "SLV": "Silver", "USO": "Crude Oil", "TLT": "20y Treasury", 
-    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum"
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
+    # FX for the forge's catalyst desk (plan 42 B6): Yahoo FX has no volume,
+    # so monitor.py treats `=X` like an index.
+    "EURUSD=X": "EUR/USD", "JPY=X": "USD/JPY"
 }
 
 VWAP_WATCHLIST = list(TICKER_MAP.keys())

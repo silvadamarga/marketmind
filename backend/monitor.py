@@ -230,7 +230,7 @@ def vwap_monitor_loop():
                     valid_idx = None
                     
                     # Check if it's an index (starts with ^) or known index like DX-Y
-                    is_index = ticker.startswith('^') or ticker == 'DX-Y.NYB'
+                    is_index = ticker.startswith('^') or ticker == 'DX-Y.NYB' or ticker.endswith('=X')
                     
                     # Iterate backwards through the dataframe
                     for idx in reversed(t_df.index):
