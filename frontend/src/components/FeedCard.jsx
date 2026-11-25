@@ -184,10 +184,11 @@ const FeedCard = (props) => {
                     <span className="shrink-0 font-semibold uppercase tracking-wider text-amber-400/90">NEW</span>
                 )}
                 <span className="ml-auto shrink-0 flex items-center gap-1.5 tabular-nums text-slate-500">
-                    {narrative && narrative.direction && (
-                        <span title={`story ${narrative.direction}`}
-                            className={`w-1.5 h-1.5 rounded-full ${narrative.direction === 'bull' ? 'bg-emerald-500'
-                                : narrative.direction === 'bear' ? 'bg-rose-500' : 'bg-slate-500'}`} />
+                    {/* The headline's own ingest tag (Gemini), not its story's lean. */}
+                    {update.sentiment && (
+                        <span title={`headline tagged ${update.sentiment.toLowerCase()}`}
+                            className={`w-1.5 h-1.5 rounded-full ${update.sentiment === 'BULLISH' ? 'bg-emerald-500'
+                                : update.sentiment === 'BEARISH' || update.sentiment === 'NEGATIVE' ? 'bg-rose-500' : 'bg-slate-500'}`} />
                     )}
                     {formatTimeAgo(update.date)}
                 </span>

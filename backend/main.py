@@ -120,8 +120,11 @@ def format_news_event(row):
         "date": row_dict.get("timestamp"),
         "relevanceScore": display_score,
         "impact": impact_label,
-        # sentiment / ml_score retired from the public payload (direction is dead);
-        # priority (relevanceScore) + novelty are attention signals, not direction.
+        # ml_score stays retired from the payload (direction is dead); priority
+        # (relevanceScore) + novelty are attention signals, not direction.
+        # The headline's own ingest tag rides along for the feed dot (human asked
+        # 2026-11-25; the site is tailnet-only since 10-03). It is mood, not edge.
+        "sentiment": row_dict.get("sentiment"),
         "summary": thesis,
         "thesis": thesis,
         "tags": tags,
