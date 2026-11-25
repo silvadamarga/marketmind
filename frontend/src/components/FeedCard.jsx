@@ -64,11 +64,14 @@ const FeedCard = (props) => {
 
     // Left SPINE: a uniform 3px rail flush to the card's left edge — same width on
     // every tier so the rail (and the text beside it) line up straight down the feed.
-    // Colour reads the story DIRECTION by default (bull/neutral/bear from the attached
-    // narrative); the loud priority tiers keep their impact colour + faint tint so
-    // criticals still jump out of the tape.
-    const dirSpine = narrative && narrative.direction === 'bull' ? 'border-l-emerald-500'
-        : narrative && narrative.direction === 'bear' ? 'border-l-rose-500'
+    // Colour reads the attached story's headline COUNT by default: mood.tilt =
+    // (bull - bear) / all headlines, -100..+100, a lean only at |tilt| >= 20. Not
+    // Gemini's story verdict, which can contradict its own headlines (2026-11-25:
+    // SPY verdict bear on tilt +50). The loud priority tiers keep their impact
+    // colour + faint tint so criticals still jump out of the tape.
+    const tilt = narrative?.mood?.tilt;
+    const dirSpine = tilt >= 20 ? 'border-l-emerald-500'
+        : tilt <= -20 ? 'border-l-rose-500'
         : 'border-l-slate-600';
     const spine = update.impact === 'CRITICAL' ? 'border-l-red-500 bg-red-950/20'
         : update.impact === 'HIGH' ? 'border-l-amber-500 bg-amber-950/10'
